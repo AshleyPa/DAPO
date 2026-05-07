@@ -14,6 +14,9 @@ import type {
   AccountSecretsResp,
   AccountTestResp,
   AccountUpdateBody,
+  AdminPromptGalleryBody,
+  AdminPromptGalleryItem,
+  AdminPromptGalleryReorderBody,
   AdminUserAdjustPointsBody,
   AdminUserAdjustPointsResp,
   AdminUserCreateBody,
@@ -124,6 +127,27 @@ export const promoApi = {
   update: (id: number, body: AdminPromoBody) =>
     request<void>({ url: `/promo/codes/${id}`, method: 'PUT', data: body }),
   remove: (id: number) => request<void>({ url: `/promo/codes/${id}`, method: 'DELETE' }),
+};
+
+export interface PromptGalleryListQuery {
+  keyword?: string;
+  modality?: 'image' | 'text' | 'video' | '';
+  category?: string;
+  status?: 0 | 1 | '';
+  page?: number;
+  page_size?: number;
+}
+
+export const promptGalleryApi = {
+  list: (q: PromptGalleryListQuery = {}) =>
+    request<PageData<AdminPromptGalleryItem>>({ url: '/prompt-gallery', method: 'GET', params: q }),
+  create: (body: AdminPromptGalleryBody) =>
+    request<{ id: number }>({ url: '/prompt-gallery', method: 'POST', data: body }),
+  update: (id: number, body: AdminPromptGalleryBody) =>
+    request<void>({ url: `/prompt-gallery/${id}`, method: 'PUT', data: body }),
+  remove: (id: number) => request<void>({ url: `/prompt-gallery/${id}`, method: 'DELETE' }),
+  reorder: (body: AdminPromptGalleryReorderBody) =>
+    request<{ updated: number }>({ url: '/prompt-gallery/reorder', method: 'POST', data: body }),
 };
 
 export interface AccountListQuery {

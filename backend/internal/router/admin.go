@@ -41,6 +41,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	sysCfgRepo := repo.NewSystemConfigRepo(deps.DB)
 	promoRepo := repo.NewPromoRepo(deps.DB)
 	dashboardRepo := repo.NewDashboardRepo(deps.DB)
+	promptGalleryRepo := repo.NewPromptGalleryRepo(deps.DB)
 
 	// === pool ===
 	pool := service.NewAccountPool(accountRepo, 30*time.Second)
@@ -54,6 +55,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	promoSvc := service.NewAdminPromoService(promoRepo)
 	sysCfgSvc := service.NewSystemConfigService(sysCfgRepo)
 	proxySvc := service.NewProxyService(proxyRepo, deps.AES)
+	promptGallerySvc := service.NewPromptGalleryService(promptGalleryRepo)
 	openaiOAuth := service.NewOpenAIOAuthService(sysCfgSvc)
 	accountTest := service.NewAccountTestService(accountRepo, proxySvc, sysCfgSvc, openaiOAuth, deps.AES)
 	// 把测试服务注入 AccountAdminService，使 Test/Refresh/BatchRefresh 走得通。
@@ -70,6 +72,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	sysH := handler.NewAdminSystemHandler(sysCfgSvc)
 	logH := handler.NewAdminLogHandler(generationRepo, accountRepo, deps.AES)
 	dashboardH := handler.NewAdminDashboardHandler(dashboardRepo)
+	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc)
 
 	// auth 公开
 	auth := v1.Group("/auth")
@@ -151,6 +154,15 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 			promo.POST("/codes", promoH.Create)
 			promo.PUT("/codes/:id", promoH.Update)
 			promo.DELETE("/codes/:id", promoH.Delete)
+		}
+
+		promptGallery := authed.Group("/prompt-gallery")
+		{
+			promptGallery.GET("", promptGalleryH.AdminList)
+			promptGallery.POST("", promptGalleryH.Create)
+			promptGallery.POST("/reorder", promptGalleryH.Reorder)
+			promptGallery.PUT("/:id", promptGalleryH.Update)
+			promptGallery.DELETE("/:id", promptGalleryH.Delete)
 		}
 
 		logs := authed.Group("/logs")

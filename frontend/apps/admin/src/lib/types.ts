@@ -176,6 +176,43 @@ export interface AdminPromoBody {
   status?: 0 | 1;
 }
 
+export type PromptGalleryModality = 'image' | 'text' | 'video';
+
+export interface AdminPromptGalleryItem {
+  id: number;
+  modality: PromptGalleryModality;
+  category: string;
+  title: string;
+  subtitle?: string;
+  cover_url: string;
+  prompt: string;
+  tags: string[];
+  variables_schema: Record<string, unknown>;
+  sort_order: number;
+  status: 0 | 1 | number;
+  locale: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AdminPromptGalleryBody {
+  modality?: PromptGalleryModality;
+  category?: string;
+  title?: string;
+  subtitle?: string;
+  cover_url?: string;
+  prompt?: string;
+  tags?: string[];
+  variables_schema?: Record<string, unknown>;
+  sort_order?: number;
+  status?: 0 | 1;
+  locale?: string;
+}
+
+export interface AdminPromptGalleryReorderBody {
+  items: Array<{ id: number; sort_order: number }>;
+}
+
 export interface DashboardProviderRow {
   provider: string;
   total: number;

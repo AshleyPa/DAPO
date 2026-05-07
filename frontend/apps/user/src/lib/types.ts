@@ -173,6 +173,21 @@ export interface PublicModel {
   enabled: boolean;
 }
 
+export interface PromptGalleryItem {
+  id: number;
+  modality: 'image' | 'text' | 'video';
+  category: string;
+  title: string;
+  subtitle?: string;
+  cover_url: string;
+  prompt: string;
+  tags: string[];
+  variables_schema: Record<string, unknown>;
+  sort_order: number;
+  status: 0 | 1 | number;
+  locale: string;
+}
+
 export interface RedeemCDKResp {
   points: number;
   biz: string;

@@ -35,6 +35,7 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 	genRepo := repo.NewGenerationRepo(deps.DB)
 	sysCfgRepo := repo.NewSystemConfigRepo(deps.DB)
 	proxyRepo := repo.NewProxyRepo(deps.DB)
+	promptGalleryRepo := repo.NewPromptGalleryRepo(deps.DB)
 
 	authSvc := service.NewAuthService(deps.DB, userRepo, deps.JWT)
 	userSvc := service.NewUserService(userRepo)
@@ -43,6 +44,7 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 	cdkSvc := service.NewCDKService(deps.DB, billingSvc)
 	sysCfgSvc := service.NewSystemConfigService(sysCfgRepo)
 	proxySvc := service.NewProxyService(proxyRepo, deps.AES)
+	promptGallerySvc := service.NewPromptGalleryService(promptGalleryRepo)
 
 	pool := service.NewAccountPool(accountRepo, 30*time.Second)
 	providers := factory.Build()
@@ -53,8 +55,10 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 	keyH := handler.NewAPIKeyHandler(keySvc)
 	billH := handler.NewBillingHandler(billingSvc, cdkSvc)
 	genH := handler.NewGenerationHandler(genSvc, chatSvc, genRepo, accountRepo, sysCfgSvc, deps.AES)
+	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc)
 
 	v1.GET("/models", genH.Models)
+	v1.GET("/public/prompt-gallery", promptGalleryH.PublicList)
 	v1.GET("/gen/cached/*path", genH.CachedAsset)
 	v1.GET("/gen/assets/:task_id/:seq", genH.Asset)
 

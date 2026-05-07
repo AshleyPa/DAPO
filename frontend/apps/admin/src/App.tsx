@@ -12,6 +12,7 @@ const UsersPage = lazy(() => import('./pages/users/UsersPage'));
 const BillingPage = lazy(() => import('./pages/billing/BillingPage'));
 const PromoPage = lazy(() => import('./pages/promo/PromoPage'));
 const CDKPage = lazy(() => import('./pages/promo/CDKPage'));
+const PromptGalleryPage = lazy(() => import('./pages/content/PromptGalleryPage'));
 const ConfigPage = lazy(() => import('./pages/system/ConfigPage'));
 const BillingSettingsPage = lazy(() => import('./pages/system/BillingSettingsPage'));
 const RechargePackagesPage = lazy(() => import('./pages/system/RechargePackagesPage'));
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="/billing"    element={<BillingPage />} />
               <Route path="/promo"      element={<PromoPage />} />
               <Route path="/cdk"        element={<CDKPage />} />
+              <Route path="/prompt-gallery" element={<PromptGalleryPage />} />
               <Route path="/config"     element={<ConfigPage />} />
               <Route path="/billing-settings" element={<BillingSettingsPage />} />
               <Route path="/recharge-packages" element={<RechargePackagesPage />} />

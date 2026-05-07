@@ -11,6 +11,7 @@ import type {
   LoginResp,
   MeResp,
   PageData,
+  PromptGalleryItem,
   PublicModel,
   RedeemCDKResp,
   RegisterResp,
@@ -101,4 +102,16 @@ export const genApi = {
     }),
   deleteHistory: (scope: 'before_3d' | 'before_7d' | 'failed' | 'all') =>
     request<{ deleted: number }>({ method: 'DELETE', url: '/gen/history', params: { scope } }),
+};
+
+export const promptGalleryApi = {
+  list: async (modality: 'image' | 'text' | 'video') => {
+    const r = await request<{ list: PromptGalleryItem[] } | PromptGalleryItem[] | null>({
+      method: 'GET',
+      url: '/public/prompt-gallery',
+      params: { modality },
+    });
+    if (Array.isArray(r)) return r;
+    return r?.list ?? [];
+  },
 };

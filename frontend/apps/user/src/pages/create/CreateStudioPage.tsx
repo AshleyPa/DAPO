@@ -25,12 +25,20 @@ import clsx from 'clsx';
 import { useEnsureLoggedIn } from '../../hooks/useEnsureLoggedIn';
 import { ApiError } from '../../lib/api';
 import { fmtRelative } from '../../lib/format';
-import { genApi } from '../../lib/services';
-import type { GenerationTask, PublicModel } from '../../lib/types';
+import { genApi, promptGalleryApi } from '../../lib/services';
+import type { GenerationTask, PromptGalleryItem, PublicModel } from '../../lib/types';
 import { useAuthStore } from '../../stores/auth';
 import { toast } from '../../stores/toast';
 
 type StudioMode = 'image' | 'text' | 'video';
+
+type PromptGalleryCard = {
+  id?: number;
+  title: string;
+  subtitle?: string;
+  image: string;
+  prompt: string;
+};
 
 const MODES: Array<{ value: StudioMode; label: string; icon: typeof Image }> = [
   { value: 'image', label: '图片', icon: Image },
@@ -78,7 +86,8 @@ const HISTORY_PAGE_SIZES = [20, 50, 100] as const;
 type HistoryDeleteScope = 'before_3d' | 'before_7d' | 'all';
 const TEXT_MAX_ATTACHMENTS = 5;
 const VIDEO_MAX_ATTACHMENTS = 7;
-const SUGGESTIONS = [
+const FALLBACK_PROMPT_GALLERY: Record<StudioMode, PromptGalleryCard[]> = {
+  image: [
   {
     title: '极简产品广告',
     image: '/examples/case-1.jpg',
@@ -170,7 +179,42 @@ photorealistic, ultra detailed, cinematic studio lighting, realistic figurine, c
   }
 }`,
   },
-];
+  ],
+  text: [
+    {
+      title: '产品卖点文案',
+      image: '/examples/case-1.jpg',
+      prompt: '请为一个新消费品牌产品写 5 组高级、克制、有记忆点的产品卖点文案。要求：每组包含一句主标题、一句副标题、3 个卖点 bullet，语气简洁，不夸张，不使用空泛形容词。',
+    },
+    {
+      title: '社媒发布文案',
+      image: '/examples/case-2.jpg',
+      prompt: '请把以下主题改写成适合小红书/朋友圈发布的文案：主题是【填写主题】。要求：开头有吸引力，正文自然可信，结尾有轻度行动号召，避免油腻营销感。',
+    },
+    {
+      title: '视频脚本草稿',
+      image: '/examples/case-3.jpg',
+      prompt: '请为一个 30 秒短视频写脚本，主题是【填写主题】。输出结构：镜头编号、画面描述、旁白/字幕、节奏提示。整体风格清晰、紧凑、有画面感。',
+    },
+  ],
+  video: [
+    {
+      title: '产品动态展示',
+      image: '/examples/case-1.jpg',
+      prompt: 'A premium product reveal video. The product sits on a clean studio podium, soft directional lighting, slow cinematic camera push-in, subtle reflections, elegant minimal background, high-end commercial style, smooth motion, no text overlay.',
+    },
+    {
+      title: '城市氛围短片',
+      image: '/examples/case-2.jpg',
+      prompt: 'A cinematic city atmosphere video at golden hour. Slow tracking shot through a modern urban street, warm light, gentle motion, refined documentary feeling, realistic details, calm premium mood, 16:9.',
+    },
+    {
+      title: '参考图轻运动',
+      image: '/examples/case-3.jpg',
+      prompt: 'Animate the reference image with subtle natural motion. Keep the subject identity and composition stable, add gentle camera movement, realistic lighting changes, cinematic depth, smooth motion, no distortion.',
+    },
+  ],
+};
 
 export default function CreateStudioPage() {
   const location = useLocation();
@@ -208,6 +252,20 @@ export default function CreateStudioPage() {
   const pollRef = useRef<number | null>(null);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const promptGallery = useQuery({
+    queryKey: ['prompt-gallery', mode],
+    queryFn: () => promptGalleryApi.list(mode),
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  const promptGalleryCards = useMemo(() => {
+    const remote = (promptGallery.data ?? [])
+      .filter((item) => item.title && item.cover_url && item.prompt)
+      .map(promptGalleryItemToCard);
+    return remote.length ? remote : FALLBACK_PROMPT_GALLERY[mode];
+  }, [promptGallery.data, mode]);
 
   useEffect(() => () => {
     if (pollRef.current) window.clearInterval(pollRef.current);
@@ -334,6 +392,11 @@ export default function CreateStudioPage() {
       else if (mode === 'video') createVideo.mutate();
       else createImage.mutate();
     }, '登录后即可开始创作');
+  };
+
+  const fillPromptFromCard = (item: PromptGalleryCard) => {
+    setPrompt(item.prompt);
+    window.requestAnimationFrame(() => promptRef.current?.focus());
   };
 
   const readFileAsDataURL = (file: File) => new Promise<string>((resolve, reject) => {
@@ -472,31 +535,29 @@ export default function CreateStudioPage() {
         </section>
       )}
 
-      {mode === 'image' && (
-        <section className="mx-auto mt-12 max-w-[760px]">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-[20px] font-medium text-neutral-950">创建图片</h2>
-            <div className="flex items-center gap-2 text-neutral-400">
-              <button className="grid h-9 w-9 place-items-center rounded-full border border-neutral-200 hover:text-neutral-900"><ChevronLeft size={18} /></button>
-              <button className="grid h-9 w-9 place-items-center rounded-full border border-neutral-200 hover:text-neutral-900"><ChevronRight size={18} /></button>
-            </div>
+      <section className="mx-auto mt-12 max-w-[760px]">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-[20px] font-medium text-neutral-950">创建{modeTitle(mode)}</h2>
+          <div className="flex items-center gap-2 text-neutral-400">
+            <button className="grid h-9 w-9 place-items-center rounded-full border border-neutral-200 hover:text-neutral-900"><ChevronLeft size={18} /></button>
+            <button className="grid h-9 w-9 place-items-center rounded-full border border-neutral-200 hover:text-neutral-900"><ChevronRight size={18} /></button>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            {SUGGESTIONS.map((item) => (
-              <button
-                key={item.title}
-                type="button"
-                onClick={() => setPrompt(item.prompt)}
-                className="group relative aspect-[4/5] overflow-hidden rounded-[22px] text-left shadow-sm"
-              >
-                <img src={item.image} alt={item.title} className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" loading="lazy" />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
-                <span className="absolute bottom-3 left-3 right-3 text-sm font-medium text-white">{item.title}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          {promptGalleryCards.map((item) => (
+            <button
+              key={`${item.id ?? item.title}-${item.title}`}
+              type="button"
+              onClick={() => fillPromptFromCard(item)}
+              className="group relative aspect-[4/5] overflow-hidden rounded-[22px] text-left shadow-sm"
+            >
+              <img src={item.image} alt={item.title} className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" loading="lazy" />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+              <span className="absolute bottom-3 left-3 right-3 text-sm font-medium text-white">{item.title}</span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <section className="mt-14">
         <div className="mx-auto mb-4 flex max-w-[1500px] items-center justify-between gap-3 px-0">
@@ -857,6 +918,16 @@ function statusText(status: number) {
   if (status === 4) return '已退款';
   if (status === 1) return '生成中';
   return '排队中';
+}
+
+function promptGalleryItemToCard(item: PromptGalleryItem): PromptGalleryCard {
+  return {
+    id: item.id,
+    title: item.title,
+    subtitle: item.subtitle,
+    image: item.cover_url,
+    prompt: item.prompt,
+  };
 }
 
 function modelsByKind(models: PublicModel[] | undefined, kind: PublicModel['kind'], fallback: SelectModel[]): SelectModel[] {
