@@ -40,6 +40,13 @@ type ProviderRoute struct {
 	Strategy      string
 }
 
+type ProviderRouteTrace struct {
+	MatchedConfig    bool
+	MatchedKind      string
+	MatchedModelCode string
+	FallbackReason   string
+}
+
 // ProviderRouteService resolves public model routes from system_config.
 type ProviderRouteService struct {
 	cfg *SystemConfigService
@@ -50,29 +57,42 @@ func NewProviderRouteService(cfg *SystemConfigService) *ProviderRouteService {
 }
 
 func (s *ProviderRouteService) Resolve(ctx context.Context, kind provider.Kind, modelCode, fallbackProvider string) ProviderRoute {
+	route, _ := s.ResolveExplain(ctx, kind, modelCode, fallbackProvider)
+	return route
+}
+
+func (s *ProviderRouteService) ResolveExplain(ctx context.Context, kind provider.Kind, modelCode, fallbackProvider string) (ProviderRoute, ProviderRouteTrace) {
 	route := ProviderRoute{
 		Provider: strings.TrimSpace(fallbackProvider),
 		Strategy: "round_robin",
 	}
+	trace := ProviderRouteTrace{}
 	if s == nil || s.cfg == nil {
-		return route.withDefaults(modelCode)
+		trace.FallbackReason = "provider.routes 服务未初始化"
+		return route.withDefaults(modelCode), trace
 	}
 	raw := s.cfg.GetString(ctx, SettingProviderRoutes, "")
 	if strings.TrimSpace(raw) == "" {
-		return route.withDefaults(modelCode)
+		trace.FallbackReason = "provider.routes 未配置"
+		return route.withDefaults(modelCode), trace
 	}
 	var rules []ProviderRouteRule
 	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
-		return route.withDefaults(modelCode)
+		trace.FallbackReason = "provider.routes 解析失败"
+		return route.withDefaults(modelCode), trace
 	}
 	rule, ok := findProviderRouteRule(rules, string(kind), modelCode)
 	if !ok {
-		return route.withDefaults(modelCode)
+		trace.FallbackReason = "没有匹配的模型路由规则"
+		return route.withDefaults(modelCode), trace
 	}
+	trace.MatchedKind = strings.TrimSpace(rule.Kind)
+	trace.MatchedModelCode = strings.TrimSpace(rule.ModelCode)
 	strategy := normalizeRouteStrategy(rule.Strategy)
 	option, ok := pickProviderRouteOption(rule.Routes)
 	if !ok {
-		return route.withDefaults(modelCode)
+		trace.FallbackReason = "匹配规则没有启用上游路线"
+		return route.withDefaults(modelCode), trace
 	}
 	if option.Provider != "" {
 		route.Provider = strings.TrimSpace(option.Provider)
@@ -87,7 +107,8 @@ func (s *ProviderRouteService) Resolve(ctx context.Context, kind provider.Kind, 
 		strategy = normalizeRouteStrategy(option.Strategy)
 	}
 	route.Strategy = strategy
-	return route.withDefaults(modelCode)
+	trace.MatchedConfig = true
+	return route.withDefaults(modelCode), trace
 }
 
 func (r ProviderRoute) withDefaults(modelCode string) ProviderRoute {

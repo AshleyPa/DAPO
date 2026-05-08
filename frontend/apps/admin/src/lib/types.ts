@@ -570,6 +570,29 @@ export interface ProviderRouteRule {
   routes: ProviderRouteOption[];
 }
 
+export interface ProviderRouteTestReq {
+  kind: 'image' | 'text' | 'video' | 'chat';
+  model_code: string;
+  fallback_provider?: 'gpt' | 'grok' | '';
+}
+
+export interface ProviderRouteTestResp {
+  kind: string;
+  model_code: string;
+  fallback_provider: string;
+  provider: string;
+  upstream_model: string;
+  auth_type?: string;
+  strategy: string;
+  matched_config: boolean;
+  matched_kind?: string;
+  matched_model_code?: string;
+  fallback_reason?: string;
+  candidate_accounts: number;
+  available_accounts: number;
+  warning?: string;
+}
+
 /** 已知 key（前端只列展示需要的，未列的也允许保存） */
 export interface SystemSettings {
   /** 是否启用全局代理 */

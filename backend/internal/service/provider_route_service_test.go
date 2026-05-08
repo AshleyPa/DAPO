@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kleinai/backend/internal/model"
@@ -107,5 +108,31 @@ func TestNormalizeProviderRouteRulesConfigRejectsDuplicateEnabledRule(t *testing
 	})
 	if err == nil {
 		t.Fatalf("expected duplicate enabled rules to be rejected")
+	}
+}
+
+func TestProviderRouteResolveExplainReportsFallbackReason(t *testing.T) {
+	svc := &ProviderRouteService{}
+	route, trace := svc.ResolveExplain(context.Background(), "image", "gpt-image-2", "gpt")
+	if route.Provider != "gpt" || route.UpstreamModel != "gpt-image-2" {
+		t.Fatalf("unexpected fallback route: %#v", route)
+	}
+	if trace.MatchedConfig {
+		t.Fatalf("unexpected matched config")
+	}
+	if trace.FallbackReason == "" {
+		t.Fatalf("expected fallback reason")
+	}
+}
+
+func TestDefaultProviderRouteFallback(t *testing.T) {
+	if got := defaultProviderRouteFallback("image", "gpt-image-2"); got != "gpt" {
+		t.Fatalf("expected image fallback gpt, got %s", got)
+	}
+	if got := defaultProviderRouteFallback("video", "grok-video"); got != "grok" {
+		t.Fatalf("expected video fallback grok, got %s", got)
+	}
+	if got := defaultProviderRouteFallback("chat", "grok-4.20-fast"); got != "grok" {
+		t.Fatalf("expected grok chat fallback, got %s", got)
 	}
 }

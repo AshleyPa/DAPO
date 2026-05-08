@@ -35,6 +35,8 @@ import type {
   DashboardOverviewResp,
   PageData,
   PoolStatsResp,
+  ProviderRouteTestReq,
+  ProviderRouteTestResp,
   ProxyCreateBody,
   ProxyBatchImportBody,
   ProxyBatchImportResult,
@@ -277,6 +279,15 @@ export const systemApi = {
     request<{ deleted_files: number; deleted_bytes: number; remain_bytes: number }>({
       url: '/system/cache',
       method: 'DELETE',
+      data: body,
+    }),
+};
+
+export const providerRoutesApi = {
+  test: (body: ProviderRouteTestReq) =>
+    request<ProviderRouteTestResp>({
+      url: '/provider-routes/test',
+      method: 'POST',
       data: body,
     }),
 };

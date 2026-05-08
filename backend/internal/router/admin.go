@@ -54,6 +54,8 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	cdkSvc := service.NewCDKService(deps.DB, billingSvc)
 	promoSvc := service.NewAdminPromoService(promoRepo)
 	sysCfgSvc := service.NewSystemConfigService(sysCfgRepo)
+	routeSvc := service.NewProviderRouteService(sysCfgSvc)
+	providerRouteTestSvc := service.NewProviderRouteTestService(routeSvc, accountRepo)
 	proxySvc := service.NewProxyService(proxyRepo, deps.AES)
 	promptGallerySvc := service.NewPromptGalleryService(promptGalleryRepo)
 	openaiOAuth := service.NewOpenAIOAuthService(sysCfgSvc)
@@ -70,6 +72,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	promoH := handler.NewAdminPromoHandler(promoSvc)
 	proxyH := handler.NewAdminProxyHandler(proxySvc, accountTest)
 	sysH := handler.NewAdminSystemHandler(sysCfgSvc)
+	providerRouteH := handler.NewAdminProviderRouteHandler(providerRouteTestSvc)
 	logH := handler.NewAdminLogHandler(generationRepo, accountRepo, deps.AES)
 	dashboardH := handler.NewAdminDashboardHandler(dashboardRepo)
 	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc)
@@ -140,6 +143,12 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 			sys.PUT("/settings", sysH.UpdateSettings)
 			sys.GET("/cache", sysH.CacheStats)
 			sys.DELETE("/cache", sysH.CleanCache)
+		}
+
+		providerRoutes := authed.Group("/provider-routes")
+		providerRoutes.Use(superOnly)
+		{
+			providerRoutes.POST("/test", providerRouteH.Test)
 		}
 
 		cdk := authed.Group("/cdk")

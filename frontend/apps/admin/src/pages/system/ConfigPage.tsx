@@ -3,8 +3,8 @@ import { Cloud, CreditCard, Database, GitBranch, RefreshCw, Save, ShieldAlert, T
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { ApiError } from '../../lib/api';
-import { proxiesApi, systemApi } from '../../lib/services';
-import type { ProviderRouteRule, ProxyItem, SystemSettings } from '../../lib/types';
+import { providerRoutesApi, proxiesApi, systemApi } from '../../lib/services';
+import type { ProviderRouteRule, ProviderRouteTestReq, ProviderRouteTestResp, ProxyItem, SystemSettings } from '../../lib/types';
 import { toast } from '../../stores/toast';
 import ProviderRoutesEditor, { defaultProviderRoutes, normalizeProviderRoutes, providerRoutesValue } from './ProviderRoutesEditor';
 
@@ -76,6 +76,12 @@ const DEFAULT_FORM: FormState = {
   alipay_subject_prefix: 'DAPO达波显影-',
   wechat_mch_id: '',
   wechat_api_v3_key: '',
+};
+
+const DEFAULT_ROUTE_TEST: ProviderRouteTestReq = {
+  kind: 'image',
+  model_code: 'gpt-image-2',
+  fallback_provider: '',
 };
 
 const asBool = (v: unknown, fallback = false) => (v == null ? fallback : Boolean(v));
@@ -170,6 +176,7 @@ export default function ConfigPage() {
   });
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [dirty, setDirty] = useState(false);
+  const [routeTest, setRouteTest] = useState<ProviderRouteTestReq>(DEFAULT_ROUTE_TEST);
 
   useEffect(() => {
     if (settings.data) {
@@ -199,6 +206,16 @@ export default function ConfigPage() {
       toast.success(`已清理 ${formatBytes(r.deleted_bytes)} / ${r.deleted_files} 个缓存文件`);
       qc.invalidateQueries({ queryKey: ['admin', 'system', 'cache'] });
     },
+    onError: (e: ApiError | Error) => toast.error(e.message),
+  });
+
+  const testRoute = useMutation({
+    mutationFn: () => providerRoutesApi.test({
+      ...routeTest,
+      model_code: routeTest.model_code.trim(),
+      fallback_provider: routeTest.fallback_provider || undefined,
+    }),
+    onSuccess: () => toast.success('路由测试完成'),
     onError: (e: ApiError | Error) => toast.error(e.message),
   });
 
@@ -235,6 +252,13 @@ export default function ConfigPage() {
 
           <Section icon={<GitBranch size={18} />} title="模型路由" desc="配置图片、文字、视频模型进入哪个上游账号池，并控制轮询策略和认证类型。">
             <ProviderRoutesEditor value={form.provider_routes} onChange={(v) => set('provider_routes', v)} />
+            <ProviderRouteDryRunPanel
+              value={routeTest}
+              result={testRoute.data}
+              loading={testRoute.isPending}
+              onChange={setRouteTest}
+              onSubmit={() => testRoute.mutate()}
+            />
           </Section>
 
           <Section icon={<Database size={18} />} title="刷新与存储" desc="控制 OAuth 刷新窗口、全局代理和生成历史保留周期。">
@@ -374,6 +398,85 @@ function TextField({ label, value, onChange, placeholder, type = 'text' }: { lab
 
 function NumberField({ label, value, min, max, onChange }: { label: string; value: number; min?: number; max?: number; onChange: (v: number) => void }) {
   return <Field label={label}><input type="number" className="input" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value) || 0)} /></Field>;
+}
+
+function ProviderRouteDryRunPanel({
+  value,
+  result,
+  loading,
+  onChange,
+  onSubmit,
+}: {
+  value: ProviderRouteTestReq;
+  result?: ProviderRouteTestResp;
+  loading: boolean;
+  onChange: (v: ProviderRouteTestReq) => void;
+  onSubmit: () => void;
+}) {
+  const setTest = <K extends keyof ProviderRouteTestReq>(key: K, next: ProviderRouteTestReq[K]) => {
+    onChange({ ...value, [key]: next });
+  };
+  return (
+    <div className="rounded-md border border-border bg-surface-2 p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-small font-semibold text-text-primary">路由测试</div>
+          <div className="text-small text-text-tertiary">Dry-run 当前模型会命中的 provider、上游模型和账号池可承接数量。</div>
+        </div>
+        <button type="button" className="btn btn-outline btn-sm" disabled={loading || !value.model_code.trim()} onClick={onSubmit}>
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> {loading ? '测试中...' : '测试路由'}
+        </button>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-[120px_minmax(180px,1fr)_140px]">
+        <label className="field">
+          <span className="field-label">入口</span>
+          <select className="select" value={value.kind} onChange={(e) => setTest('kind', e.target.value as ProviderRouteTestReq['kind'])}>
+            <option value="image">图片</option>
+            <option value="text">文字</option>
+            <option value="video">视频</option>
+            <option value="chat">对话</option>
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">模型编码</span>
+          <input className="input" value={value.model_code} placeholder="gpt-image-2 / grok-4.20-fast" onChange={(e) => setTest('model_code', e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field-label">兜底账号池</span>
+          <select className="select" value={value.fallback_provider || ''} onChange={(e) => setTest('fallback_provider', e.target.value as ProviderRouteTestReq['fallback_provider'])}>
+            <option value="">自动判断</option>
+            <option value="gpt">GPT</option>
+            <option value="grok">Grok</option>
+          </select>
+        </label>
+      </div>
+      {result && (
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <RouteResultStat label="命中账号池" value={result.provider || '-'} />
+          <RouteResultStat label="上游模型" value={result.upstream_model || '-'} />
+          <RouteResultStat label="策略 / 认证" value={`${result.strategy || '-'}${result.auth_type ? ` / ${result.auth_type}` : ''}`} />
+          <RouteResultStat label="可用账号" value={`${result.available_accounts}/${result.candidate_accounts}`} />
+          <div className="md:col-span-2 xl:col-span-4 rounded-md border border-border bg-surface p-3 text-small text-text-tertiary">
+            {result.matched_config ? (
+              <span>已命中配置：{result.matched_kind || '-'} / {result.matched_model_code || '-'}</span>
+            ) : (
+              <span>未命中配置，使用兜底：{result.fallback_reason || '默认路由'}</span>
+            )}
+            {result.warning && <span className="ml-2 text-warning">{result.warning}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RouteResultStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-surface p-3">
+      <div className="text-small text-text-tertiary">{label}</div>
+      <div className="mt-1 break-words text-small font-semibold text-text-primary">{value}</div>
+    </div>
+  );
 }
 
 function formatBytes(bytes: number) {
