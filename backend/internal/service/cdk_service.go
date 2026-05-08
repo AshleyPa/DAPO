@@ -10,13 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/kleinai/backend/internal/model"
 	"github.com/kleinai/backend/pkg/crypto"
 	"github.com/kleinai/backend/pkg/errcode"
-	"github.com/kleinai/backend/pkg/logger"
 )
 
 // CDKService 兑换码服务。
@@ -40,17 +39,25 @@ func (s *CDKService) Redeem(ctx context.Context, userID uint64, code string) (in
 	var grantedPoints int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var c model.RedeemCode
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("code = ?", code).First(&c).Error; err != nil {
 			return errcode.CDKInvalid
 		}
-		if c.Status != model.CDKStatusUnused {
-			return errcode.CDKUsed
-		}
-
 		var batch model.RedeemCodeBatch
-		if err := tx.Where("id = ?", c.BatchID).First(&batch).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", c.BatchID).First(&batch).Error; err != nil {
 			return errcode.CDKInvalid
+		}
+		if c.Status != model.CDKStatusUnused {
+			if c.Status == model.CDKStatusUsed && c.UsedBy != nil && *c.UsedBy == userID {
+				points, err := parsePointsReward(batch.RewardType, batch.RewardValue)
+				if err != nil {
+					return errcode.Internal.Wrap(err)
+				}
+				grantedPoints = points
+				return nil
+			}
+			return errcode.CDKUsed
 		}
 		now := time.Now().UTC()
 		if batch.Status != model.PromoStatusEnabled {
@@ -83,14 +90,18 @@ func (s *CDKService) Redeem(ctx context.Context, userID uint64, code string) (in
 		}
 
 		// 标记已使用
-		if err := tx.Model(&model.RedeemCode{}).
+		res := tx.Model(&model.RedeemCode{}).
 			Where("id = ? AND status = ?", c.ID, model.CDKStatusUnused).
 			Updates(map[string]any{
 				"status":  model.CDKStatusUsed,
 				"used_by": userID,
 				"used_at": now,
-			}).Error; err != nil {
-			return errcode.DBError.Wrap(err)
+			})
+		if res.Error != nil {
+			return errcode.DBError.Wrap(res.Error)
+		}
+		if res.RowsAffected != 1 {
+			return errcode.CDKUsed
 		}
 		// 更新 batch.used_qty
 		if err := tx.Model(&model.RedeemCodeBatch{}).
@@ -99,16 +110,10 @@ func (s *CDKService) Redeem(ctx context.Context, userID uint64, code string) (in
 			return errcode.DBError.Wrap(err)
 		}
 		grantedPoints = points
-		return nil
+		bizID := fmt.Sprintf("cdk:%s", code)
+		return s.billing.GrantPointsTx(ctx, tx, userID, model.BizCDK, bizID, grantedPoints, "redeem code")
 	})
 	if err != nil {
-		return 0, err
-	}
-
-	// CDK 兑换走 GrantPoints（独立事务，幂等容易处理）
-	bizID := fmt.Sprintf("cdk:%s", code)
-	if err := s.billing.GrantPoints(ctx, userID, model.BizCDK, bizID, grantedPoints, "redeem code"); err != nil {
-		logger.FromCtx(ctx).Error("cdk.grant_points", zap.String("code", code), zap.Error(err))
 		return 0, err
 	}
 	return grantedPoints, nil

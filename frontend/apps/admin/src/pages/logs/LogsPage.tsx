@@ -11,9 +11,9 @@ import {
   Video,
   X,
 } from 'lucide-react';
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 
-import { ApiError } from '../../lib/api';
+import { ApiError, api } from '../../lib/api';
 import { fmtPoints, fmtTime } from '../../lib/format';
 import { logsApi } from '../../lib/services';
 import type { AdminGenerationLogItem, AdminGenerationUpstreamLogItem } from '../../lib/types';
@@ -53,17 +53,47 @@ function fmtDuration(ms?: number): string {
 }
 
 function Preview({ row }: { row: AdminGenerationLogItem }) {
+  const [blobUrl, setBlobUrl] = useState('');
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!row.preview_url) return;
+    let alive = true;
+    let currentUrl = '';
+    setBlobUrl('');
+    setFailed(false);
+    api.request<Blob>({
+      url: adminPreviewPath(row.preview_url),
+      method: 'GET',
+      responseType: 'blob',
+    }).then((res) => {
+      if (!alive) return;
+      currentUrl = URL.createObjectURL(res.data);
+      setBlobUrl(currentUrl);
+    }).catch(() => {
+      if (alive) setFailed(true);
+    });
+    return () => {
+      alive = false;
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+    };
+  }, [row.preview_url]);
+
   if (!row.preview_url) return <span className="text-text-tertiary">-</span>;
+  if (failed) return <span className="text-text-tertiary">预览失败</span>;
   if (row.kind === 'video') {
     return (
-      <a className="btn btn-ghost btn-sm" href={row.preview_url} target="_blank" rel="noreferrer">
+      <a className="btn btn-ghost btn-sm" href={blobUrl || undefined} target="_blank" rel="noreferrer">
         <Video size={14} /> 查看
       </a>
     );
   }
+  if (!blobUrl) {
+    return <span className="text-text-tertiary">加载中</span>;
+  }
   return (
     <a
-      href={row.preview_url}
+      href={blobUrl}
       target="_blank"
       rel="noreferrer"
       className="block h-10 w-10 overflow-hidden rounded-md border border-border bg-surface-2"
@@ -71,6 +101,10 @@ function Preview({ row }: { row: AdminGenerationLogItem }) {
       <img src={row.preview_url} alt="" className="h-full w-full object-cover" />
     </a>
   );
+}
+
+function adminPreviewPath(url: string) {
+  return url.replace(/^\/admin\/api\/v1/, '');
 }
 
 export default function LogsPage() {

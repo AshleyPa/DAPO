@@ -54,11 +54,11 @@ func (s *AdminAuthService) Login(ctx context.Context, req *dto.LoginReq, ip stri
 	}
 
 	jti := uuid.NewString()
-	access, accExp, err := s.jwt.IssueAccess(u.ID, jwtx.SubjectAdmin, jti, roles)
+	access, accExp, err := s.jwt.IssueAccess(u.ID, jwtx.SubjectAdmin, jti, roles, u.TokenVersion)
 	if err != nil {
 		return nil, nil, errcode.Internal.Wrap(err)
 	}
-	refresh, refExp, err := s.jwt.IssueRefresh(u.ID, jwtx.SubjectAdmin, jti)
+	refresh, refExp, err := s.jwt.IssueRefresh(u.ID, jwtx.SubjectAdmin, jti, u.TokenVersion)
 	if err != nil {
 		return nil, nil, errcode.Internal.Wrap(err)
 	}

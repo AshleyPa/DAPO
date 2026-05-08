@@ -547,6 +547,29 @@ export interface ProxyBatchTestResp {
 
 // ==================== 系统配置 ====================
 
+export type ProviderRouteKind = 'image' | 'text' | 'video' | 'chat' | '*';
+export type ProviderRouteStrategy = 'round_robin' | 'weighted_rr';
+export type ProviderRouteProvider = 'gpt' | 'grok' | string;
+export type ProviderRouteAuthType = '' | 'api_key' | 'cookie' | 'oauth';
+
+export interface ProviderRouteOption {
+  provider: ProviderRouteProvider;
+  upstream_model?: string;
+  auth_type?: ProviderRouteAuthType;
+  strategy?: ProviderRouteStrategy;
+  weight?: number;
+  priority?: number;
+  enabled?: boolean;
+}
+
+export interface ProviderRouteRule {
+  kind: ProviderRouteKind;
+  model_code: string;
+  enabled?: boolean;
+  strategy?: ProviderRouteStrategy;
+  routes: ProviderRouteOption[];
+}
+
 /** 已知 key（前端只列展示需要的，未列的也允许保存） */
 export interface SystemSettings {
   /** 是否启用全局代理 */
@@ -561,5 +584,7 @@ export interface SystemSettings {
   'oauth.openai_client_id'?: string;
   /** OpenAI OAuth Token Endpoint */
   'oauth.openai_token_url'?: string;
+  /** 图片/文字/视频上游账号池路由配置 */
+  'provider.routes'?: ProviderRouteRule[];
   [key: string]: unknown;
 }

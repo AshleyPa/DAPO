@@ -60,5 +60,14 @@ func (r *AdminRepo) GetRoleByID(ctx context.Context, id uint64) (*model.AdminRol
 func (r *AdminRepo) UpdatePassword(ctx context.Context, id uint64, hash string) error {
 	return r.db.WithContext(ctx).Model(&model.AdminUser{}).
 		Where("id = ? AND deleted_at IS NULL", id).
-		Update("password", hash).Error
+		Updates(map[string]any{
+			"password":      hash,
+			"token_version": gorm.Expr("token_version + 1"),
+		}).Error
+}
+
+func (r *AdminRepo) IncrementTokenVersion(ctx context.Context, id uint64) error {
+	return r.db.WithContext(ctx).Model(&model.AdminUser{}).
+		Where("id = ? AND deleted_at IS NULL", id).
+		UpdateColumn("token_version", gorm.Expr("token_version + 1")).Error
 }

@@ -80,12 +80,13 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 		auth.Use(middleware.RateLimitIP(deps.Limiter, 30))
 	}
 	auth.POST("/login", authH.Login)
-	v1.GET("/logs/generations/:task_id/preview", logH.GenerationPreview)
 
 	// 登录后接口
 	authed := v1.Group("/")
 	authed.Use(middleware.AuthJWT(deps.JWT, jwtx.SubjectAdmin))
+	authed.Use(middleware.AdminTokenVersion(adminRepo))
 	{
+		superOnly := middleware.RequireAdminRole("super")
 		authed.GET("/auth/me", authH.Me)
 		authed.POST("/auth/password", authH.ChangePassword)
 		authed.GET("/dashboard/overview", dashboardH.Overview)
@@ -95,10 +96,11 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 			users.GET("", userH.List)
 			users.POST("", userH.Create)
 			users.PUT("/:id", userH.Update)
-			users.POST("/:id/points", userH.AdjustPoints)
+			users.POST("/:id/points", superOnly, userH.AdjustPoints)
 		}
 
 		acc := authed.Group("/accounts")
+		acc.Use(superOnly)
 		{
 			acc.GET("", accountH.List)
 			acc.POST("", accountH.Create)
@@ -118,6 +120,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 
 		// 代理管理：CRUD + 连通性测试
 		proxies := authed.Group("/proxies")
+		proxies.Use(superOnly)
 		{
 			proxies.GET("", proxyH.List)
 			proxies.POST("", proxyH.Create)
@@ -131,6 +134,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 
 		// 系统配置：通用 KV（代理全局开关 / OAuth 客户端 / refresh 阈值等）
 		sys := authed.Group("/system")
+		sys.Use(superOnly)
 		{
 			sys.GET("/settings", sysH.GetSettings)
 			sys.PUT("/settings", sysH.UpdateSettings)
@@ -139,6 +143,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 		}
 
 		cdk := authed.Group("/cdk")
+		cdk.Use(superOnly)
 		{
 			cdk.POST("/batches", cdkH.CreateBatch)
 		}
@@ -149,6 +154,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 		}
 
 		promo := authed.Group("/promo")
+		promo.Use(superOnly)
 		{
 			promo.GET("/codes", promoH.List)
 			promo.POST("/codes", promoH.Create)
@@ -168,6 +174,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 		logs := authed.Group("/logs")
 		{
 			logs.GET("/generations", logH.GenerationLogs)
+			logs.GET("/generations/:task_id/preview", logH.GenerationPreview)
 			logs.GET("/generations/:task_id/upstream", logH.GenerationUpstreamLogs)
 			logs.DELETE("/generations", logH.PurgeGenerationLogs)
 		}

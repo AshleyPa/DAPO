@@ -10,11 +10,10 @@ import { RequireAuth } from './routes/RequireAuth';
 
 const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/auth/RegisterPage'));
+const ForgotPasswordPage = lazy(() => import('./pages/auth/ForgotPasswordPage'));
 const CreateStudioPage = lazy(() => import('./pages/create/CreateStudioPage'));
 const HistoryPage = lazy(() => import('./pages/create/HistoryPage'));
 const BillingPage = lazy(() => import('./pages/billing/BillingPage'));
-const KeysPage = lazy(() => import('./pages/keys/KeysPage'));
-const DocsPage = lazy(() => import('./pages/keys/DocsPage'));
 const InvitePage = lazy(() => import('./pages/invite/InvitePage'));
 const SettingsPage = lazy(() => import('./pages/settings/SettingsPage'));
 
@@ -29,6 +28,7 @@ export default function App() {
           <Route element={<AuthLayout />}>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
+            <Route path="/forgot" element={<ForgotPasswordPage />} />
           </Route>
 
           {/* 主应用：未登录也可浏览创作页 / 调用说明 */}
@@ -37,13 +37,13 @@ export default function App() {
             <Route path="/create/image" element={<CreateStudioPage />} />
             <Route path="/create/text" element={<CreateStudioPage />} />
             <Route path="/create/video" element={<CreateStudioPage />} />
-            <Route path="/docs" element={<DocsPage />} />
+            <Route path="/docs" element={<Navigate to="/create/image" replace />} />
 
             {/* 受保护：未登录将弹浮层并退回首页 */}
             <Route element={<RequireAuth />}>
               <Route path="/history" element={<HistoryPage />} />
               <Route path="/billing" element={<BillingPage />} />
-              <Route path="/keys" element={<KeysPage />} />
+              <Route path="/keys" element={<Navigate to="/create/image" replace />} />
               <Route path="/invite" element={<InvitePage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>

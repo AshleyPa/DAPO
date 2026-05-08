@@ -36,6 +36,8 @@ const (
 	SettingGrokCFBrowser       = "grok.cf.browser"
 	SettingGrokCFLastError     = "grok.cf.last_error"
 	SettingGrokCFLastRefreshAt = "grok.cf.last_refresh_at"
+
+	MaskedSecretValue = "********"
 )
 
 // SystemConfigService 通用系统配置 KV 服务，带 30s 内存缓存。
@@ -68,6 +70,31 @@ func (s *SystemConfigService) GetAll(ctx context.Context) (map[string]any, error
 	return out, nil
 }
 
+// GetAllMasked returns all config for the admin UI with sensitive values
+// replaced by a fixed marker. Business services should continue to use
+// GetString/GetBool so runtime secrets are never read from the masked shape.
+func (s *SystemConfigService) GetAllMasked(ctx context.Context) (map[string]any, error) {
+	rows, err := s.repo.GetAll(ctx)
+	if err != nil {
+		return nil, errcode.DBError.Wrap(err)
+	}
+	out := make(map[string]any, len(rows))
+	for _, r := range rows {
+		var v any
+		_ = json.Unmarshal([]byte(r.Value), &v)
+		if IsSensitiveConfigKey(r.Key) {
+			if strings.TrimSpace(r.Value) != "" && strings.TrimSpace(r.Value) != "null" {
+				out[r.Key] = MaskedSecretValue
+			} else {
+				out[r.Key] = ""
+			}
+			continue
+		}
+		out[r.Key] = v
+	}
+	return out, nil
+}
+
 // UpsertMany 批量更新。
 // values 中每个值会先 JSON 序列化再写入。
 func (s *SystemConfigService) UpsertMany(ctx context.Context, values map[string]any, updatedBy uint64) error {
@@ -88,6 +115,66 @@ func (s *SystemConfigService) UpsertMany(ctx context.Context, values map[string]
 	}
 	s.invalidate()
 	return nil
+}
+
+// UpsertManyAdmin writes admin-provided settings while treating masked or
+// empty sensitive values as "keep existing". It returns the number of keys
+// actually persisted.
+func (s *SystemConfigService) UpsertManyAdmin(ctx context.Context, values map[string]any, updatedBy uint64) (int, error) {
+	if len(values) == 0 {
+		return 0, nil
+	}
+	filtered := make(map[string]any, len(values))
+	for k, v := range values {
+		if IsSensitiveConfigKey(k) && shouldKeepSensitiveValue(v) {
+			continue
+		}
+		if k == SettingProviderRoutes {
+			routes, err := NormalizeProviderRouteRulesConfig(v)
+			if err != nil {
+				return 0, errcode.InvalidParam.Wrap(err)
+			}
+			filtered[k] = routes
+			continue
+		}
+		filtered[k] = v
+	}
+	if len(filtered) == 0 {
+		return 0, nil
+	}
+	if err := s.UpsertMany(ctx, filtered, updatedBy); err != nil {
+		return 0, err
+	}
+	return len(filtered), nil
+}
+
+func IsSensitiveConfigKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	if k == "" {
+		return false
+	}
+	if strings.Contains(k, "password") ||
+		strings.Contains(k, "private_key") ||
+		strings.Contains(k, "access_key_secret") ||
+		strings.Contains(k, "api_v3_key") ||
+		strings.Contains(k, "secret") ||
+		strings.Contains(k, "cookies") ||
+		strings.Contains(k, "clearance") {
+		return true
+	}
+	return false
+}
+
+func shouldKeepSensitiveValue(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return true
+	case string:
+		s := strings.TrimSpace(x)
+		return s == "" || s == MaskedSecretValue
+	default:
+		return false
+	}
 }
 
 // GetString 读字符串配置。fallback 为默认。

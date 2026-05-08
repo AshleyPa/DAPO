@@ -37,6 +37,13 @@ import (
 
 const codexOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
+const (
+	routeParamProvider      = "_provider_route_provider"
+	routeParamUpstreamModel = "_provider_route_upstream_model"
+	routeParamStrategy      = "_provider_route_strategy"
+	routeParamAuthType      = "_provider_route_auth_type"
+)
+
 // GenerationService 生成调度服务。
 type GenerationService struct {
 	db        *gorm.DB
@@ -48,13 +55,14 @@ type GenerationService struct {
 	aes       *crypto.AESGCM // 用于解密 account.credential_enc
 	proxySvc  *ProxyService
 	cfg       *SystemConfigService
+	routeSvc  *ProviderRouteService
 }
 
 // PriceFunc 模型计费：返回单次成本（点 *100）。
 type PriceFunc func(modelCode string, kind provider.Kind, params map[string]any) int64
 
 // NewGenerationService 构造。aes 必须非空（账号凭证加密强制）。
-func NewGenerationService(db *gorm.DB, r *repo.GenerationRepo, pool *AccountPool, billing *BillingService, providers map[string]provider.Provider, priceFn PriceFunc, aes *crypto.AESGCM, proxySvc *ProxyService, cfg *SystemConfigService) *GenerationService {
+func NewGenerationService(db *gorm.DB, r *repo.GenerationRepo, pool *AccountPool, billing *BillingService, providers map[string]provider.Provider, priceFn PriceFunc, aes *crypto.AESGCM, proxySvc *ProxyService, cfg *SystemConfigService, routeSvc *ProviderRouteService) *GenerationService {
 	return &GenerationService{
 		db:        db,
 		repo:      r,
@@ -65,6 +73,7 @@ func NewGenerationService(db *gorm.DB, r *repo.GenerationRepo, pool *AccountPool
 		aes:       aes,
 		proxySvc:  proxySvc,
 		cfg:       cfg,
+		routeSvc:  routeSvc,
 	}
 }
 
@@ -92,6 +101,10 @@ func (s *GenerationService) Create(ctx context.Context, req CreateRequest) (*mod
 	}
 	if req.IdemKey == "" {
 		req.IdemKey = uuid.NewString()
+	}
+	req.Params = s.applyProviderRoute(ctx, req.Kind, req.ModelCode, req.Provider, req.Params)
+	if p := routeParamString(req.Params, routeParamProvider, req.Provider); p != "" {
+		req.Provider = p
 	}
 
 	if existing, err := s.repo.GetByIdem(ctx, req.UserID, req.IdemKey); err == nil && existing != nil {
@@ -167,14 +180,14 @@ func (s *GenerationService) Create(ctx context.Context, req CreateRequest) (*mod
 func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask) {
 	log := logger.L().With(zap.String("task", t.TaskID))
 
-	prov, ok := s.providers[t.Provider]
-	if !ok {
-		s.failTask(ctx, t, "provider not registered: "+t.Provider)
-		return
-	}
-
 	var params map[string]any
 	_ = json.Unmarshal([]byte(t.Params), &params)
+	route := providerRouteFromParams(params, t.Provider, t.ModelCode)
+	prov, ok := s.providers[route.Provider]
+	if !ok {
+		s.failTask(ctx, t, "provider not registered: "+route.Provider)
+		return
+	}
 	var refs []string
 	if t.RefAssets != nil {
 		_ = json.Unmarshal([]byte(*t.RefAssets), &refs)
@@ -222,7 +235,7 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 			TaskID:    t.TaskID,
 			Kind:      provider.Kind(t.Kind),
 			Mode:      provider.Mode(t.Mode),
-			ModelCode: t.ModelCode,
+			ModelCode: route.UpstreamModel,
 			Prompt:    t.Prompt,
 			Params:    params,
 			RefAssets: refs,
@@ -274,7 +287,7 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 		lastErr = err
 		if isUsageLimitReachedError(err) {
 			s.markProviderQuotaLimited(ctx, acc, err.Error(), usageLimitResetAt(err))
-		} else if isTransientProviderPathError(t.Provider, err) {
+		} else if isTransientProviderPathError(route.Provider, err) {
 			s.pool.MarkTransientFailed(ctx, acc.ID, err.Error())
 		} else {
 			cooldown := providerCooldown(err)
@@ -416,17 +429,28 @@ func (s *GenerationService) pickAccountForTask(ctx context.Context, t *model.Gen
 	if t == nil {
 		return nil, errcode.NoAvailableAcc
 	}
-	if t.Provider != model.ProviderGPT || t.Kind != string(provider.KindImage) || !strings.EqualFold(t.ModelCode, "gpt-image-2") {
-		return s.pool.ReserveWhere(ctx, t.Provider, "round_robin", nil)
+	route := providerRouteFromParams(params, t.Provider, t.ModelCode)
+	predicate := func(acc *model.Account) bool {
+		return matchesRouteAuthType(acc, route.AuthType) && accountAllowsRouteModel(acc, t.ModelCode, route.UpstreamModel)
 	}
-	if accountRequiresCodexRoute(t, params) {
-		return s.pool.ReserveWhere(ctx, t.Provider, "round_robin", isCodexOAuthAccount)
+	if route.Provider != model.ProviderGPT || t.Kind != string(provider.KindImage) || !strings.EqualFold(t.ModelCode, "gpt-image-2") {
+		return s.pool.ReserveWhere(ctx, route.Provider, route.Strategy, predicate)
 	}
-	return s.pool.ReserveWhere(ctx, t.Provider, "round_robin", func(acc *model.Account) bool {
+	if route.AuthType == "" && accountRequiresCodexRoute(t, params) {
+		return s.pool.ReserveWhere(ctx, route.Provider, route.Strategy, func(acc *model.Account) bool {
+			return predicate(acc) && isCodexOAuthAccount(acc)
+		})
+	}
+	if route.AuthType == "" {
+		return s.pool.ReserveWhere(ctx, route.Provider, route.Strategy, func(acc *model.Account) bool {
+			return predicate(acc) && acc != nil && acc.AuthType == model.AuthTypeOAuth
+		})
+	}
+	return s.pool.ReserveWhere(ctx, route.Provider, route.Strategy, func(acc *model.Account) bool {
 		if acc == nil {
 			return false
 		}
-		return acc.AuthType == model.AuthTypeOAuth
+		return predicate(acc)
 	})
 }
 
@@ -448,6 +472,53 @@ func shouldUseGPTWebRoute(params map[string]any) bool {
 		return false
 	}
 	return tier == "1K" || tier == "1"
+}
+
+func (s *GenerationService) applyProviderRoute(ctx context.Context, kind provider.Kind, modelCode, fallbackProvider string, params map[string]any) map[string]any {
+	if params == nil {
+		params = map[string]any{}
+	}
+	route := ProviderRoute{Provider: fallbackProvider, UpstreamModel: modelCode, Strategy: "round_robin"}
+	if s.routeSvc != nil {
+		route = s.routeSvc.Resolve(ctx, kind, modelCode, fallbackProvider)
+	}
+	if route.Provider != "" {
+		params[routeParamProvider] = route.Provider
+	}
+	if route.UpstreamModel != "" {
+		params[routeParamUpstreamModel] = route.UpstreamModel
+	}
+	if route.Strategy != "" {
+		params[routeParamStrategy] = route.Strategy
+	}
+	if route.AuthType != "" {
+		params[routeParamAuthType] = route.AuthType
+	}
+	return params
+}
+
+func providerRouteFromParams(params map[string]any, fallbackProvider, modelCode string) ProviderRoute {
+	return ProviderRoute{
+		Provider:      routeParamString(params, routeParamProvider, fallbackProvider),
+		UpstreamModel: routeParamString(params, routeParamUpstreamModel, modelCode),
+		Strategy:      normalizeRouteStrategy(routeParamString(params, routeParamStrategy, "round_robin")),
+		AuthType:      routeParamString(params, routeParamAuthType, ""),
+	}
+}
+
+func routeParamString(params map[string]any, key, fallback string) string {
+	if params == nil {
+		return strings.TrimSpace(fallback)
+	}
+	if v, ok := params[key]; ok {
+		switch x := v.(type) {
+		case string:
+			if strings.TrimSpace(x) != "" {
+				return strings.TrimSpace(x)
+			}
+		}
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func isCodexOAuthAccount(acc *model.Account) bool {

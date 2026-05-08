@@ -5,18 +5,19 @@ import "time"
 
 // AdminUser 后台账号。
 type AdminUser struct {
-	ID          uint64     `gorm:"primaryKey;column:id" json:"id"`
-	Username    string     `gorm:"column:username;size:64;not null;uniqueIndex" json:"username"`
-	Password    string     `gorm:"column:password;size:72;not null" json:"-"`
-	Nickname    *string    `gorm:"column:nickname;size:64" json:"nickname,omitempty"`
-	Email       *string    `gorm:"column:email;size:128" json:"email,omitempty"`
-	RoleID      uint64     `gorm:"column:role_id;not null;index" json:"role_id"`
-	Status      int8       `gorm:"column:status;not null;default:1" json:"status"`
-	LastLoginAt *time.Time `gorm:"column:last_login_at" json:"last_login_at,omitempty"`
-	LastLoginIP *string    `gorm:"column:last_login_ip;size:45" json:"-"`
-	CreatedAt   time.Time  `gorm:"column:created_at;autoCreateTime" json:"created_at"`
-	UpdatedAt   time.Time  `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
-	DeletedAt   *time.Time `gorm:"column:deleted_at" json:"-"`
+	ID           uint64     `gorm:"primaryKey;column:id" json:"id"`
+	Username     string     `gorm:"column:username;size:64;not null;uniqueIndex" json:"username"`
+	Password     string     `gorm:"column:password;size:72;not null" json:"-"`
+	Nickname     *string    `gorm:"column:nickname;size:64" json:"nickname,omitempty"`
+	Email        *string    `gorm:"column:email;size:128" json:"email,omitempty"`
+	RoleID       uint64     `gorm:"column:role_id;not null;index" json:"role_id"`
+	TokenVersion int64      `gorm:"column:token_version;not null;default:0" json:"-"`
+	Status       int8       `gorm:"column:status;not null;default:1" json:"status"`
+	LastLoginAt  *time.Time `gorm:"column:last_login_at" json:"last_login_at,omitempty"`
+	LastLoginIP  *string    `gorm:"column:last_login_ip;size:45" json:"-"`
+	CreatedAt    time.Time  `gorm:"column:created_at;autoCreateTime" json:"created_at"`
+	UpdatedAt    time.Time  `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
+	DeletedAt    *time.Time `gorm:"column:deleted_at" json:"-"`
 }
 
 // TableName 表名。

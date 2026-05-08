@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/kleinai/backend/internal/repo"
 	"github.com/kleinai/backend/pkg/errcode"
 	"github.com/kleinai/backend/pkg/jwtx"
 	"github.com/kleinai/backend/pkg/response"
@@ -45,6 +46,50 @@ func AuthJWT(mgr *jwtx.Manager, expectSub jwtx.Subject) gin.HandlerFunc {
 		c.Set(string(CtxUID), claims.UID)
 		c.Set(string(CtxClaims), claims)
 		c.Next()
+	}
+}
+
+// UserTokenVersion rejects access tokens issued before logout/password reset.
+func UserTokenVersion(users *repo.UserRepo) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		cl := MustClaims(c)
+		u, err := users.GetByID(c.Request.Context(), cl.UID)
+		if err != nil || cl.TokenVersion != u.TokenVersion {
+			response.Fail(c, errcode.TokenInvalid)
+			return
+		}
+		c.Next()
+	}
+}
+
+// AdminTokenVersion rejects admin tokens issued before a password change.
+func AdminTokenVersion(admins *repo.AdminRepo) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		cl := MustClaims(c)
+		u, err := admins.GetByID(c.Request.Context(), cl.UID)
+		if err != nil || cl.TokenVersion != u.TokenVersion {
+			response.Fail(c, errcode.TokenInvalid)
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireAdminRole is a minimal role guard for high-risk admin routes.
+func RequireAdminRole(allowed ...string) gin.HandlerFunc {
+	set := make(map[string]struct{}, len(allowed))
+	for _, role := range allowed {
+		set[role] = struct{}{}
+	}
+	return func(c *gin.Context) {
+		cl := MustClaims(c)
+		for _, role := range cl.Roles {
+			if _, ok := set[role]; ok {
+				c.Next()
+				return
+			}
+		}
+		response.Fail(c, errcode.Forbidden)
 	}
 }
 

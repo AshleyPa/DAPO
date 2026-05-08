@@ -2,6 +2,8 @@
 package router
 
 import (
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +15,7 @@ import (
 	"github.com/kleinai/backend/internal/repo"
 	"github.com/kleinai/backend/internal/service"
 	"github.com/kleinai/backend/pkg/jwtx"
+	"github.com/kleinai/backend/pkg/mailer"
 )
 
 // MountAPI 在 root 上挂载用户端 /api/v1 全部业务路由。
@@ -36,24 +39,29 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 	sysCfgRepo := repo.NewSystemConfigRepo(deps.DB)
 	proxyRepo := repo.NewProxyRepo(deps.DB)
 	promptGalleryRepo := repo.NewPromptGalleryRepo(deps.DB)
+	emailCodeRepo := repo.NewEmailVerificationRepo(deps.DB)
+	rechargeRepo := repo.NewRechargeRepo(deps.DB)
 
-	authSvc := service.NewAuthService(deps.DB, userRepo, deps.JWT)
+	emailVerifier := service.NewEmailVerificationService(emailCodeRepo, userRepo, mailer.New(deps.Cfg.SMTP))
+	authSvc := service.NewAuthService(deps.DB, userRepo, deps.JWT, emailVerifier)
 	userSvc := service.NewUserService(userRepo)
 	keySvc := service.NewAPIKeyService(apiKeyRepo)
 	billingSvc := service.NewBillingService(deps.DB, walletRepo)
 	cdkSvc := service.NewCDKService(deps.DB, billingSvc)
 	sysCfgSvc := service.NewSystemConfigService(sysCfgRepo)
+	rechargeSvc := service.NewRechargeService(deps.DB, rechargeRepo, sysCfgSvc)
 	proxySvc := service.NewProxyService(proxyRepo, deps.AES)
 	promptGallerySvc := service.NewPromptGalleryService(promptGalleryRepo)
+	routeSvc := service.NewProviderRouteService(sysCfgSvc)
 
 	pool := service.NewAccountPool(accountRepo, 30*time.Second)
 	providers := factory.Build()
-	genSvc := service.NewGenerationService(deps.DB, genRepo, pool, billingSvc, providers, service.ConfigPriceFn(sysCfgSvc), deps.AES, proxySvc, sysCfgSvc)
-	chatSvc := service.NewChatService(deps.DB, genRepo, pool, billingSvc, sysCfgSvc, deps.AES, proxySvc)
+	genSvc := service.NewGenerationService(deps.DB, genRepo, pool, billingSvc, providers, service.ConfigPriceFn(sysCfgSvc), deps.AES, proxySvc, sysCfgSvc, routeSvc)
+	chatSvc := service.NewChatService(deps.DB, genRepo, pool, billingSvc, sysCfgSvc, routeSvc, deps.AES, proxySvc)
 
 	authH := handler.NewAuthHandler(authSvc, userSvc)
 	keyH := handler.NewAPIKeyHandler(keySvc)
-	billH := handler.NewBillingHandler(billingSvc, cdkSvc)
+	billH := handler.NewBillingHandler(billingSvc, cdkSvc, rechargeSvc)
 	genH := handler.NewGenerationHandler(genSvc, chatSvc, genRepo, accountRepo, sysCfgSvc, deps.AES)
 	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc)
 
@@ -61,6 +69,7 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 	v1.GET("/public/prompt-gallery", promptGalleryH.PublicList)
 	v1.GET("/gen/cached/*path", genH.CachedAsset)
 	v1.GET("/gen/assets/:task_id/:seq", genH.Asset)
+	v1.POST("/billing/recharge/alipay/notify", billH.AlipayNotify)
 
 	auth := v1.Group("/auth")
 	{
@@ -68,31 +77,40 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 		if deps.Limiter != nil {
 			auth.Use(middleware.RateLimitIP(deps.Limiter, 30))
 		}
+		auth.POST("/email/code", authH.SendEmailCode)
 		auth.POST("/register", authH.Register)
 		auth.POST("/login", authH.Login)
+		auth.POST("/password/reset", authH.ResetPassword)
 		auth.POST("/refresh", authH.Refresh)
-		auth.POST("/logout", authH.Logout)
 	}
 
 	// 需要登录的用户接口
 	authed := v1.Group("/")
 	authed.Use(middleware.AuthJWT(deps.JWT, jwtx.SubjectUser))
+	authed.Use(middleware.UserTokenVersion(userRepo))
 	{
+		authed.POST("/auth/logout", authH.Logout)
 		authed.GET("/users/me", authH.Me)
 		authed.POST("/users/password", authH.ChangePassword)
 
-		keys := authed.Group("/keys")
-		{
-			keys.GET("", keyH.List)
-			keys.POST("", keyH.Create)
-			keys.POST("/:id/toggle", keyH.Toggle)
-			keys.DELETE("/:id", keyH.Delete)
+		if userKeysEnabled() {
+			keys := authed.Group("/keys")
+			{
+				keys.GET("", keyH.List)
+				keys.POST("", keyH.Create)
+				keys.POST("/:id/toggle", keyH.Toggle)
+				keys.DELETE("/:id", keyH.Delete)
+			}
 		}
 
 		bill := authed.Group("/billing")
 		{
 			bill.GET("/logs", billH.Logs)
 			bill.POST("/cdk/redeem", billH.RedeemCDK)
+			bill.GET("/recharge/packages", billH.RechargePackages)
+			bill.GET("/recharge/orders", billH.RechargeOrders)
+			bill.POST("/recharge/orders", billH.CreateRechargeOrder)
+			bill.GET("/recharge/orders/:order_no", billH.GetRechargeOrder)
 		}
 
 		gen := authed.Group("/gen")
@@ -104,5 +122,14 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 			gen.GET("/history", genH.List)
 			gen.DELETE("/history", genH.DeleteHistory)
 		}
+	}
+}
+
+func userKeysEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("KLEIN_USER_KEYS_ENABLED"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }

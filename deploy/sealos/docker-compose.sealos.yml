@@ -1,0 +1,104 @@
+# DAPO V2 / Sealos deployment compose template.
+# This file intentionally does not start MySQL or Redis. Production data
+# services should use Sealos managed Database and App Launchpad Redis.
+
+x-common-env: &common-env
+  KLEIN_ENV: ${KLEIN_ENV:-prod}
+  KLEIN_DB_DSN: ${KLEIN_DB_DSN}
+  KLEIN_REDIS_ADDR: ${KLEIN_REDIS_ADDR}
+  KLEIN_REDIS_PASSWORD: ${KLEIN_REDIS_PASSWORD:-}
+  KLEIN_REDIS_DB: ${KLEIN_REDIS_DB:-0}
+  KLEIN_JWT_SECRET: ${KLEIN_JWT_SECRET}
+  KLEIN_JWT_REFRESH_SECRET: ${KLEIN_JWT_REFRESH_SECRET}
+  KLEIN_AES_KEY: ${KLEIN_AES_KEY}
+  KLEIN_PROVIDER_GPT: ${KLEIN_PROVIDER_GPT:-real}
+  KLEIN_PROVIDER_GROK: ${KLEIN_PROVIDER_GROK:-real}
+  KLEIN_GPT_BASE_URL: ${KLEIN_GPT_BASE_URL:-https://api.openai.com}
+  KLEIN_GROK_BASE_URL: ${KLEIN_GROK_BASE_URL:-https://api.x.ai}
+  KLEIN_CORS_ORIGINS: ${KLEIN_CORS_ORIGINS}
+  KLEIN_SMTP_HOST: ${KLEIN_SMTP_HOST}
+  KLEIN_SMTP_PORT: ${KLEIN_SMTP_PORT:-465}
+  KLEIN_SMTP_USERNAME: ${KLEIN_SMTP_USERNAME}
+  KLEIN_SMTP_PASSWORD: ${KLEIN_SMTP_PASSWORD}
+  KLEIN_SMTP_FROM_EMAIL: ${KLEIN_SMTP_FROM_EMAIL}
+  KLEIN_SMTP_FROM_NAME: ${KLEIN_SMTP_FROM_NAME:-DAPO达波显影}
+  KLEIN_SMTP_USE_SSL: ${KLEIN_SMTP_USE_SSL:-true}
+  KLEIN_SMTP_USE_STARTTLS: ${KLEIN_SMTP_USE_STARTTLS:-false}
+  KLEIN_PAYMENT_ENABLED: ${KLEIN_PAYMENT_ENABLED:-true}
+  KLEIN_PAYMENT_PROVIDER: ${KLEIN_PAYMENT_PROVIDER:-alipay}
+  KLEIN_PAYMENT_NOTIFY_URL: ${KLEIN_PAYMENT_NOTIFY_URL}
+  KLEIN_ALIPAY_APP_ID: ${KLEIN_ALIPAY_APP_ID}
+  KLEIN_ALIPAY_PRIVATE_KEY: ${KLEIN_ALIPAY_PRIVATE_KEY}
+  KLEIN_ALIPAY_PUBLIC_KEY: ${KLEIN_ALIPAY_PUBLIC_KEY}
+  KLEIN_LOG_DIR: /app/logs
+  TZ: Asia/Shanghai
+
+services:
+  api:
+    image: ${DAPO_BACKEND_IMAGE}
+    restart: always
+    command: ["/app/api"]
+    environment:
+      <<: *common-env
+      KLEIN_NODE_ID: ${KLEIN_API_NODE_ID:-1}
+    ports:
+      - "${KLEIN_API_PORT:-17180}:17180"
+    volumes:
+      - dapo-logs:/app/logs
+      - dapo-storage:/app/storage
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:17180/healthz | grep -q ok || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  admin:
+    image: ${DAPO_BACKEND_IMAGE}
+    restart: always
+    command: ["/app/admin"]
+    environment:
+      <<: *common-env
+      KLEIN_NODE_ID: ${KLEIN_ADMIN_NODE_ID:-2}
+    ports:
+      - "${KLEIN_ADMIN_PORT:-17188}:17188"
+    volumes:
+      - dapo-logs:/app/logs
+
+  openai:
+    image: ${DAPO_BACKEND_IMAGE}
+    restart: always
+    command: ["/app/openai"]
+    environment:
+      <<: *common-env
+      KLEIN_NODE_ID: ${KLEIN_OPENAI_NODE_ID:-3}
+    ports:
+      - "${KLEIN_OPENAI_PORT:-17200}:17200"
+    volumes:
+      - dapo-logs:/app/logs
+
+  worker:
+    image: ${DAPO_BACKEND_IMAGE}
+    restart: always
+    command: ["/app/worker"]
+    environment:
+      <<: *common-env
+      KLEIN_NODE_ID: ${KLEIN_WORKER_NODE_ID:-4}
+    volumes:
+      - dapo-logs:/app/logs
+      - dapo-storage:/app/storage
+
+  user-web:
+    image: ${DAPO_USER_WEB_IMAGE}
+    restart: always
+    ports:
+      - "${DAPO_USER_WEB_PORT:-17080}:80"
+
+  admin-web:
+    image: ${DAPO_ADMIN_WEB_IMAGE}
+    restart: always
+    ports:
+      - "${DAPO_ADMIN_WEB_PORT:-17088}:80"
+
+volumes:
+  dapo-logs:
+  dapo-storage:

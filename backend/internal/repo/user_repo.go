@@ -128,7 +128,16 @@ func (r *UserRepo) UpdateLogin(ctx context.Context, id uint64, ip string) error 
 func (r *UserRepo) UpdatePassword(ctx context.Context, id uint64, hash string) error {
 	return r.db.WithContext(ctx).Model(&model.User{}).
 		Where("id = ?", id).
-		Update("password", hash).Error
+		Updates(map[string]any{
+			"password":      hash,
+			"token_version": gorm.Expr("token_version + 1"),
+		}).Error
+}
+
+func (r *UserRepo) IncrementTokenVersion(ctx context.Context, id uint64) error {
+	return r.db.WithContext(ctx).Model(&model.User{}).
+		Where("id = ? AND deleted_at IS NULL", id).
+		UpdateColumn("token_version", gorm.Expr("token_version + 1")).Error
 }
 
 // ErrNotFound 显式语义。

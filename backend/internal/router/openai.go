@@ -49,10 +49,11 @@ func MountOpenAI(r *gin.Engine, deps *bootstrap.Deps) {
 	billingSvc := service.NewBillingService(deps.DB, walletRepo)
 	sysCfgSvc := service.NewSystemConfigService(sysCfgRepo)
 	proxySvc := service.NewProxyService(proxyRepo, deps.AES)
+	routeSvc := service.NewProviderRouteService(sysCfgSvc)
 	pool := service.NewAccountPool(accountRepo, 30*time.Second)
 	providers := factory.Build()
-	genSvc := service.NewGenerationService(deps.DB, genRepo, pool, billingSvc, providers, service.ConfigPriceFn(sysCfgSvc), deps.AES, proxySvc, sysCfgSvc)
-	chatSvc := service.NewChatService(deps.DB, genRepo, pool, billingSvc, sysCfgSvc, deps.AES, proxySvc)
+	genSvc := service.NewGenerationService(deps.DB, genRepo, pool, billingSvc, providers, service.ConfigPriceFn(sysCfgSvc), deps.AES, proxySvc, sysCfgSvc, routeSvc)
+	chatSvc := service.NewChatService(deps.DB, genRepo, pool, billingSvc, sysCfgSvc, routeSvc, deps.AES, proxySvc)
 	openaiH := handler.NewOpenAIHandler(genSvc, chatSvc, genRepo)
 
 	guard := v1.Group("/")

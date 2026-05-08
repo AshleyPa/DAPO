@@ -16,13 +16,14 @@ import (
 
 // BillingHandler 用户端计费 handler。
 type BillingHandler struct {
-	billing *service.BillingService
-	cdk     *service.CDKService
+	billing  *service.BillingService
+	cdk      *service.CDKService
+	recharge *service.RechargeService
 }
 
 // NewBillingHandler 构造。
-func NewBillingHandler(b *service.BillingService, cdk *service.CDKService) *BillingHandler {
-	return &BillingHandler{billing: b, cdk: cdk}
+func NewBillingHandler(b *service.BillingService, cdk *service.CDKService, recharge *service.RechargeService) *BillingHandler {
+	return &BillingHandler{billing: b, cdk: cdk, recharge: recharge}
 }
 
 // Logs GET /api/v1/billing/logs?page=&page_size=
@@ -73,4 +74,68 @@ func (h *BillingHandler) RedeemCDK(c *gin.Context) {
 		"biz":     model.BizCDK,
 		"message": "兑换成功",
 	})
+}
+
+// RechargePackages GET /api/v1/billing/recharge/packages
+func (h *BillingHandler) RechargePackages(c *gin.Context) {
+	items, err := h.recharge.ListPackages(c.Request.Context())
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, gin.H{"list": items})
+}
+
+// CreateRechargeOrder POST /api/v1/billing/recharge/orders
+func (h *BillingHandler) CreateRechargeOrder(c *gin.Context) {
+	var req dto.CreateRechargeOrderReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.InvalidParam.Wrap(err))
+		return
+	}
+	uid := middleware.MustUID(c)
+	row, err := h.recharge.CreateOrder(c.Request.Context(), uid, &req, c.ClientIP(), c.GetHeader("Idempotency-Key"))
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, row)
+}
+
+// GetRechargeOrder GET /api/v1/billing/recharge/orders/:order_no
+func (h *BillingHandler) GetRechargeOrder(c *gin.Context) {
+	uid := middleware.MustUID(c)
+	row, err := h.recharge.GetUserOrder(c.Request.Context(), uid, c.Param("order_no"))
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, row)
+}
+
+// RechargeOrders GET /api/v1/billing/recharge/orders
+func (h *BillingHandler) RechargeOrders(c *gin.Context) {
+	uid := middleware.MustUID(c)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	rows, total, err := h.recharge.ListUserOrders(c.Request.Context(), uid, page, pageSize)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.Page(c, rows, total, page, pageSize)
+}
+
+// AlipayNotify POST /api/v1/billing/recharge/alipay/notify
+func (h *BillingHandler) AlipayNotify(c *gin.Context) {
+	if err := c.Request.ParseForm(); err != nil {
+		c.String(200, "fail")
+		return
+	}
+	text, err := h.recharge.HandleAlipayNotify(c.Request.Context(), c.Request.PostForm)
+	if err != nil {
+		c.String(200, "fail")
+		return
+	}
+	c.String(200, text)
 }

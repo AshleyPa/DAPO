@@ -26,6 +26,7 @@ type Config struct {
 	Provider  Provider  `mapstructure:"provider"`
 	Billing   Billing   `mapstructure:"billing"`
 	CDN       CDN       `mapstructure:"cdn"`
+	SMTP      SMTP      `mapstructure:"smtp"`
 	AESKey    string    `mapstructure:"-"` // 来自环境变量
 }
 
@@ -112,6 +113,18 @@ type CDN struct {
 	Base string `mapstructure:"base"`
 }
 
+type SMTP struct {
+	Host        string        `mapstructure:"host"`
+	Port        int           `mapstructure:"port"`
+	Username    string        `mapstructure:"username"`
+	Password    string        `mapstructure:"-"`
+	FromEmail   string        `mapstructure:"from_email"`
+	FromName    string        `mapstructure:"from_name"`
+	UseSSL      bool          `mapstructure:"use_ssl"`
+	UseStartTLS bool          `mapstructure:"use_starttls"`
+	Timeout     time.Duration `mapstructure:"timeout"`
+}
+
 var (
 	cfg     *Config
 	once    sync.Once
@@ -182,6 +195,24 @@ func loadInternal() (*Config, error) {
 			*target = val
 		}
 	}
+	mapEnvInt := func(target *int, key string) {
+		if val := os.Getenv(key); val != "" {
+			var n int
+			if _, err := fmt.Sscanf(val, "%d", &n); err == nil {
+				*target = n
+			}
+		}
+	}
+	mapEnvBool := func(target *bool, key string) {
+		if val := strings.ToLower(strings.TrimSpace(os.Getenv(key))); val != "" {
+			switch val {
+			case "1", "true", "yes", "on":
+				*target = true
+			case "0", "false", "no", "off":
+				*target = false
+			}
+		}
+	}
 	mapEnv(&out.MySQL.DSN, "KLEIN_DB_DSN")
 	mapEnv(&out.Redis.Addr, "KLEIN_REDIS_ADDR")
 	mapEnv(&out.Redis.Password, "KLEIN_REDIS_PASSWORD")
@@ -192,6 +223,14 @@ func loadInternal() (*Config, error) {
 	mapEnv(&out.Provider.GrokBase, "KLEIN_GROK_BASE")
 	mapEnv(&out.Logger.Dir, "KLEIN_LOG_DIR")
 	mapEnv(&out.Logger.Level, "KLEIN_LOG_LEVEL")
+	mapEnv(&out.SMTP.Host, "KLEIN_SMTP_HOST")
+	mapEnvInt(&out.SMTP.Port, "KLEIN_SMTP_PORT")
+	mapEnv(&out.SMTP.Username, "KLEIN_SMTP_USERNAME")
+	mapEnv(&out.SMTP.Password, "KLEIN_SMTP_PASSWORD")
+	mapEnv(&out.SMTP.FromEmail, "KLEIN_SMTP_FROM_EMAIL")
+	mapEnv(&out.SMTP.FromName, "KLEIN_SMTP_FROM_NAME")
+	mapEnvBool(&out.SMTP.UseSSL, "KLEIN_SMTP_USE_SSL")
+	mapEnvBool(&out.SMTP.UseStartTLS, "KLEIN_SMTP_USE_STARTTLS")
 
 	if origins := os.Getenv("KLEIN_CORS_ORIGINS"); origins != "" {
 		out.CORS.Origins = splitAndTrim(origins, ",")

@@ -33,6 +33,7 @@ type ChatService struct {
 	billing  *BillingService
 	priceFn  func(modelCode string) ChatPrice
 	cfg      *SystemConfigService
+	routeSvc *ProviderRouteService
 	aes      *crypto.AESGCM
 	proxySvc *ProxyService
 	client   *http.Client
@@ -56,7 +57,7 @@ type ChatCallRequest struct {
 	RawBody  []byte
 }
 
-func NewChatService(db *gorm.DB, r *repo.GenerationRepo, pool *AccountPool, billing *BillingService, cfg *SystemConfigService, aes *crypto.AESGCM, proxySvc *ProxyService) *ChatService {
+func NewChatService(db *gorm.DB, r *repo.GenerationRepo, pool *AccountPool, billing *BillingService, cfg *SystemConfigService, routeSvc *ProviderRouteService, aes *crypto.AESGCM, proxySvc *ProxyService) *ChatService {
 	return &ChatService{
 		db:       db,
 		repo:     r,
@@ -64,6 +65,7 @@ func NewChatService(db *gorm.DB, r *repo.GenerationRepo, pool *AccountPool, bill
 		billing:  billing,
 		priceFn:  ConfigChatPriceFn(cfg),
 		cfg:      cfg,
+		routeSvc: routeSvc,
 		aes:      aes,
 		proxySvc: proxySvc,
 		client:   &http.Client{Timeout: 10 * time.Minute},
@@ -75,17 +77,18 @@ func NewChatService(db *gorm.DB, r *repo.GenerationRepo, pool *AccountPool, bill
 
 func (s *ChatService) Complete(ctx context.Context, req ChatCallRequest) ([]byte, int, error) {
 	modelCode := strAny(req.Body["model"], "gpt-4o-mini")
-	if grokweb.IsChatModel(modelCode) {
-		return s.completeGrok(ctx, req, modelCode)
+	route := s.chatRoute(ctx, modelCode)
+	if route.Provider == model.ProviderGROK {
+		return s.completeGrok(ctx, req, modelCode, route)
 	}
-	req.Body["model"] = s.upstreamModel(modelCode)
+	req.Body["model"] = route.UpstreamModel
 	req.Body["stream"] = false
 	prompt := chatPrompt(req.Body)
 	estimate := s.estimateCost(modelCode, req.Body)
 	if s.mock {
-		return s.completeMock(ctx, req, modelCode, prompt, estimate)
+		return s.completeMockWithProvider(ctx, req, modelCode, prompt, estimate, route.Provider)
 	}
-	t, acc, err := s.prepare(ctx, req, modelCode, prompt, estimate, model.ProviderGPT)
+	t, acc, err := s.prepare(ctx, req, modelCode, prompt, estimate, route.Provider, route.Strategy, route.AuthType, route.UpstreamModel)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
@@ -116,18 +119,19 @@ func (s *ChatService) Complete(ctx context.Context, req ChatCallRequest) ([]byte
 
 func (s *ChatService) Stream(ctx context.Context, req ChatCallRequest, w http.ResponseWriter) error {
 	modelCode := strAny(req.Body["model"], "gpt-4o-mini")
-	if grokweb.IsChatModel(modelCode) {
-		return s.streamGrok(ctx, req, modelCode, w)
+	route := s.chatRoute(ctx, modelCode)
+	if route.Provider == model.ProviderGROK {
+		return s.streamGrok(ctx, req, modelCode, route, w)
 	}
-	req.Body["model"] = s.upstreamModel(modelCode)
+	req.Body["model"] = route.UpstreamModel
 	req.Body["stream"] = true
 	req.Body["stream_options"] = map[string]any{"include_usage": true}
 	prompt := chatPrompt(req.Body)
 	estimate := s.estimateCost(modelCode, req.Body)
 	if s.mock {
-		return s.streamMock(ctx, req, modelCode, prompt, estimate, w)
+		return s.streamMockWithProvider(ctx, req, modelCode, prompt, estimate, route.Provider, w)
 	}
-	t, acc, err := s.prepare(ctx, req, modelCode, prompt, estimate, model.ProviderGPT)
+	t, acc, err := s.prepare(ctx, req, modelCode, prompt, estimate, route.Provider, route.Strategy, route.AuthType, route.UpstreamModel)
 	if err != nil {
 		return err
 	}
@@ -190,13 +194,13 @@ func (s *ChatService) Stream(ctx context.Context, req ChatCallRequest, w http.Re
 	return nil
 }
 
-func (s *ChatService) completeGrok(ctx context.Context, req ChatCallRequest, modelCode string) ([]byte, int, error) {
-	req.Body["model"] = modelCode
+func (s *ChatService) completeGrok(ctx context.Context, req ChatCallRequest, modelCode string, route ProviderRoute) ([]byte, int, error) {
+	req.Body["model"] = route.UpstreamModel
 	req.Body["stream"] = false
 	prompt := chatPrompt(req.Body)
 	estimate := s.estimateCost(modelCode, req.Body)
 	if s.grokMock {
-		return s.completeMockWithProvider(ctx, req, modelCode, prompt, estimate, model.ProviderGROK)
+		return s.completeMockWithProvider(ctx, req, modelCode, prompt, estimate, route.Provider)
 	}
 	maxAttempts := 10
 	retryDelay := 800 * time.Millisecond
@@ -212,7 +216,7 @@ func (s *ChatService) completeGrok(ctx context.Context, req ChatCallRequest, mod
 		if attempt > 1 && req.IdemKey != "" {
 			attemptReq.IdemKey = fmt.Sprintf("%s-retry-%d", req.IdemKey, attempt)
 		}
-		t, acc, err := s.prepare(ctx, attemptReq, modelCode, prompt, estimate, model.ProviderGROK)
+		t, acc, err := s.prepare(ctx, attemptReq, modelCode, prompt, estimate, route.Provider, route.Strategy, route.AuthType, route.UpstreamModel)
 		if err != nil {
 			if lastErr != nil {
 				return nil, http.StatusBadGateway, lastErr
@@ -240,7 +244,7 @@ func (s *ChatService) completeGrok(ctx context.Context, req ChatCallRequest, mod
 			}
 			grok = grokweb.NewWebClientWithProxy(base, proxyURL)
 		}
-		res, err := grok.ChatComplete(ctx, cred, modelCode, req.Body)
+		res, err := grok.ChatComplete(ctx, cred, route.UpstreamModel, req.Body)
 		if err != nil {
 			lastErr = err
 			s.fail(ctx, t, err.Error())
@@ -294,15 +298,15 @@ func (s *ChatService) completeGrok(ctx context.Context, req ChatCallRequest, mod
 	return nil, http.StatusBadGateway, lastErr
 }
 
-func (s *ChatService) streamGrok(ctx context.Context, req ChatCallRequest, modelCode string, w http.ResponseWriter) error {
-	req.Body["model"] = modelCode
+func (s *ChatService) streamGrok(ctx context.Context, req ChatCallRequest, modelCode string, route ProviderRoute, w http.ResponseWriter) error {
+	req.Body["model"] = route.UpstreamModel
 	req.Body["stream"] = true
 	prompt := chatPrompt(req.Body)
 	estimate := s.estimateCost(modelCode, req.Body)
 	if s.grokMock {
-		return s.streamMockWithProvider(ctx, req, modelCode, prompt, estimate, model.ProviderGROK, w)
+		return s.streamMockWithProvider(ctx, req, modelCode, prompt, estimate, route.Provider, w)
 	}
-	t, acc, err := s.prepare(ctx, req, modelCode, prompt, estimate, model.ProviderGROK)
+	t, acc, err := s.prepare(ctx, req, modelCode, prompt, estimate, route.Provider, route.Strategy, route.AuthType, route.UpstreamModel)
 	if err != nil {
 		return err
 	}
@@ -328,7 +332,7 @@ func (s *ChatService) streamGrok(ctx context.Context, req ChatCallRequest, model
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
-	usage, err := grok.ChatStream(ctx, cred, modelCode, req.Body, w, flusher)
+	usage, err := grok.ChatStream(ctx, cred, route.UpstreamModel, req.Body, w, flusher)
 	if err != nil {
 		s.fail(ctx, t, err.Error())
 		return err
@@ -459,19 +463,27 @@ func (s *ChatService) prepareMock(ctx context.Context, req ChatCallRequest, mode
 	return t, nil
 }
 
-func (s *ChatService) prepare(ctx context.Context, req ChatCallRequest, modelCode, prompt string, estimate int64, providerName string) (*model.GenerationTask, *model.Account, error) {
+func (s *ChatService) prepare(ctx context.Context, req ChatCallRequest, modelCode, prompt string, estimate int64, providerName, strategy, authType, upstreamModel string) (*model.GenerationTask, *model.Account, error) {
 	if req.IdemKey == "" {
 		req.IdemKey = uuid.NewString()
 	}
 	if existing, err := s.repo.GetByIdem(ctx, req.UserID, req.IdemKey); err == nil && existing != nil {
 		return nil, nil, errcode.InvalidParam.WithMsg("idempotent chat replay is not supported for response body")
 	}
-	acc, err := s.pool.Pick(ctx, providerName, "round_robin")
+	acc, err := s.pool.PickWhere(ctx, providerName, normalizeRouteStrategy(strategy), func(acc *model.Account) bool {
+		return matchesRouteAuthType(acc, authType) && accountAllowsRouteModel(acc, modelCode, upstreamModel)
+	})
 	if err != nil {
 		return nil, nil, errcode.ResourceMissing.WithMsg("no available chat account: " + err.Error())
 	}
 	taskID := chatTaskID()
-	params, _ := json.Marshal(map[string]any{"estimate_points": estimate})
+	params, _ := json.Marshal(map[string]any{
+		"estimate_points":       estimate,
+		routeParamProvider:      providerName,
+		routeParamUpstreamModel: upstreamModel,
+		routeParamStrategy:      normalizeRouteStrategy(strategy),
+		routeParamAuthType:      authType,
+	})
 	t := &model.GenerationTask{
 		TaskID:       taskID,
 		UserID:       req.UserID,
@@ -504,6 +516,31 @@ func (s *ChatService) prepare(ctx context.Context, req ChatCallRequest, modelCod
 		logger.FromCtx(ctx).Warn("chat.set_running", zap.Error(err))
 	}
 	return t, acc, nil
+}
+
+func (s *ChatService) chatRoute(ctx context.Context, modelCode string) ProviderRoute {
+	fallback := model.ProviderGPT
+	if grokweb.IsChatModel(modelCode) {
+		fallback = model.ProviderGROK
+	}
+	route := ProviderRoute{Provider: fallback, UpstreamModel: modelCode, Strategy: "round_robin"}
+	if s.routeSvc != nil {
+		route = s.routeSvc.Resolve(ctx, provider.KindChat, modelCode, fallback)
+	}
+	if strings.TrimSpace(route.Provider) == "" {
+		route.Provider = fallback
+	}
+	if strings.TrimSpace(route.Strategy) == "" {
+		route.Strategy = "round_robin"
+	}
+	if strings.TrimSpace(route.UpstreamModel) == "" {
+		route.UpstreamModel = modelCode
+	}
+	if route.Provider == model.ProviderGPT && strings.EqualFold(route.UpstreamModel, modelCode) {
+		route.UpstreamModel = s.upstreamModel(modelCode)
+	}
+	route.Strategy = normalizeRouteStrategy(route.Strategy)
+	return route
 }
 
 func (s *ChatService) callJSON(ctx context.Context, acc *model.Account, body map[string]any) ([]byte, int, *ChatUsage, error) {

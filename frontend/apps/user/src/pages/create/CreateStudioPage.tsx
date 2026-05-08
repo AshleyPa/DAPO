@@ -1,27 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import {
   ArrowUp,
   Check,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   FileImage,
-  Image,
   Loader2,
   Maximize2,
   Mic,
   MoreHorizontal,
   Paperclip,
   Play,
-  Sparkles,
   Trash2,
-  Video,
   X,
 } from 'lucide-react';
 import clsx from 'clsx';
 
+import BorderGlow from '../../components/reactbits/BorderGlow';
+import CircularGallery from '../../components/reactbits/CircularGallery';
+import Galaxy from '../../components/reactbits/Galaxy';
 import { useEnsureLoggedIn } from '../../hooks/useEnsureLoggedIn';
 import { ApiError } from '../../lib/api';
 import { fmtRelative } from '../../lib/format';
@@ -31,6 +29,7 @@ import { useAuthStore } from '../../stores/auth';
 import { toast } from '../../stores/toast';
 
 type StudioMode = 'image' | 'text' | 'video';
+const ASCIIText = lazy(() => import('../../components/reactbits/ASCIIText'));
 
 type PromptGalleryCard = {
   id?: number;
@@ -39,12 +38,6 @@ type PromptGalleryCard = {
   image: string;
   prompt: string;
 };
-
-const MODES: Array<{ value: StudioMode; label: string; icon: typeof Image }> = [
-  { value: 'image', label: '图片', icon: Image },
-  { value: 'text', label: '文字', icon: Sparkles },
-  { value: 'video', label: '视频', icon: Video },
-];
 
 const GENERATING_PHRASES = [
   '正在为您设计中...',
@@ -218,7 +211,6 @@ photorealistic, ultra detailed, cinematic studio lighting, realistic figurine, c
 
 export default function CreateStudioPage() {
   const location = useLocation();
-  const navigate = useNavigate();
   const qc = useQueryClient();
   const ensureLoggedIn = useEnsureLoggedIn();
   const refreshMe = useAuthStore((s) => s.refreshMe);
@@ -353,6 +345,10 @@ export default function CreateStudioPage() {
       ? '按实际 Token'
       : (imageModels.find((m) => m.code === imageModel)?.cost ?? 4) * count;
   const maxAttachments = mode === 'video' ? VIDEO_MAX_ATTACHMENTS : TEXT_MAX_ATTACHMENTS;
+  const activeModels = mode === 'video' ? videoModels : mode === 'text' ? textModels : imageModels;
+  const activeModelCode = mode === 'video' ? videoModel : mode === 'text' ? textModel : imageModel;
+  const activeModelLabel = activeModels.find((m) => m.code === activeModelCode)?.label ?? activeModelCode;
+  const isBusy = !!inProgress || createImage.isPending || createVideo.isPending || createText.isPending;
 
   const handleTask = (t: GenerationTask) => {
     setTask(t);
@@ -435,198 +431,359 @@ export default function CreateStudioPage() {
   };
 
   return (
-    <div className="mx-auto min-h-screen w-full max-w-[1500px] px-4 pb-12 pt-10 sm:px-8 lg:px-12">
-      <section className="mx-auto max-w-[760px]">
-        <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-[28px] font-medium tracking-normal text-neutral-950">{modeTitle(mode)}</h1>
-          <ModeSwitch mode={mode} onChange={(next) => navigate(`/create/${next}`)} />
-        </div>
+    <div className="dapo-studio relative min-h-screen overflow-x-hidden bg-black text-white">
+      <div className="dapo-galaxy-layer" aria-hidden="true">
+        <Galaxy
+          mouseRepulsion
+          mouseInteraction
+          density={1}
+          glowIntensity={0.4}
+          saturation={0.4}
+          hueShift={80}
+          twinkleIntensity={0.3}
+          rotationSpeed={0.1}
+          repulsionStrength={2}
+          autoCenterRepulsion={0}
+          starSpeed={0.8}
+          speed={0.7}
+        />
+      </div>
 
-        <div className="rounded-[28px] border border-neutral-200 bg-white p-4 shadow-[0_18px_55px_rgba(15,23,42,.10)]">
-          <textarea
-            ref={promptRef}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder={mode === 'image' ? '描述新图片' : mode === 'video' ? '描述新视频' : '写下你想生成的文字内容'}
-            className="studio-prompt min-h-[66px] w-full resize-none border-0 bg-transparent px-2 pt-1 text-[15px] font-normal leading-7 text-neutral-950 outline-none ring-0 placeholder:font-normal placeholder:text-neutral-400 focus:border-0 focus:outline-none focus:ring-0"
-            maxLength={5000}
+      <div className="relative z-10 mx-auto w-full max-w-[1500px] px-4 pb-14 pt-5 sm:px-6 lg:px-10">
+        <section className="grid gap-4">
+          <DevelopmentStage
+            mode={mode}
+            task={task}
+            textResult={textResult}
+            activeModelLabel={activeModelLabel}
+            attachmentsCount={attachments.length}
+            maxAttachments={maxAttachments}
+            expectedCost={expectedCost}
+            inProgress={!!inProgress}
+            onOpen={setPreview}
           />
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => void handleAttachFiles(e.target.files)}
+
+          <div className="grid gap-4">
+            <BorderGlow
+              className="dapo-composer-glow"
+              edgeSensitivity={30}
+              glowColor="40 80 80"
+              backgroundColor="#120F17"
+              borderRadius={28}
+              glowRadius={40}
+              glowIntensity={1}
+              coneSpread={25}
+              animated={false}
+              colors={['#c084fc', '#f472b6', '#38bdf8']}
+            >
+              <div className="dapo-composer-card p-4 text-white sm:p-5">
+              <div className="mb-5 flex flex-col gap-2">
+                <PromptGalleryRail cards={promptGalleryCards} onPick={fillPromptFromCard} />
+              </div>
+
+              <div className="rounded-[8px] border border-[#d7dde5] bg-[#fbfcfd] p-3 sm:p-4">
+              <textarea
+                ref={promptRef}
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder={promptPlaceholder(mode)}
+                className="studio-prompt min-h-[128px] w-full resize-none border-0 bg-transparent px-1 pt-1 text-[16px] leading-8 text-[#101318] outline-none ring-0 placeholder:text-[#98a2b3] focus:border-0 focus:outline-none focus:ring-0"
+                maxLength={5000}
               />
-              <button
-                className="grid h-8 w-8 place-items-center rounded-full text-neutral-600 hover:bg-neutral-100"
-                title="上传参考图"
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Paperclip size={18} />
-              </button>
-              <ComposerSelect
-                value={mode === 'video' ? videoModel : mode === 'text' ? textModel : imageModel}
-                onChange={(v) => mode === 'video' ? setVideoModel(v) : mode === 'text' ? setTextModel(v) : setImageModel(v)}
-                options={(mode === 'video' ? videoModels : mode === 'text' ? textModels : imageModels).map((m) => ({ value: m.code, label: m.label }))}
-                wide={mode !== 'image'}
-              />
-              {mode === 'image' && (
-                <>
-                  <ComposerSelect value={imageRatio} onChange={(v) => setImageRatio(v as typeof IMAGE_RATIOS[number])} options={IMAGE_RATIOS.map((r) => ({ value: r, label: r }))} />
-                  <ComposerSelect value={imageResolution} onChange={(v) => setImageResolution(v as typeof IMAGE_RESOLUTIONS[number])} options={IMAGE_RESOLUTIONS.map((r) => ({ value: r, label: r }))} />
-                  <ComposerSelect value={String(count)} onChange={(v) => setCount(Number(v))} options={[1, 2, 4].map((n) => ({ value: String(n), label: `${n}张` }))} />
-                </>
+
+              {attachments.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2 border-t border-[#e6e9ee] pt-3">
+                  {attachments.map((item) => (
+                    <div key={item.id} className="group relative h-16 w-16 overflow-hidden rounded-[8px] bg-[#eef1f5]">
+                      <img src={item.dataUrl} alt={item.name} className="h-full w-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== item.id))}
+                        className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                        title="移除"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
-              {mode === 'video' && (
-                <>
-                  <ComposerSelect value={videoRatio} onChange={(v) => setVideoRatio(v as typeof VIDEO_RATIOS[number])} options={VIDEO_RATIOS.map((r) => ({ value: r, label: r }))} />
-                  <ComposerSelect value={String(duration)} onChange={(v) => setDuration(Number(v) as typeof VIDEO_DURATIONS[number])} options={VIDEO_DURATIONS.map((n) => ({ value: String(n), label: `${n}s` }))} />
-                </>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="hidden text-sm text-neutral-400 sm:inline">{typeof expectedCost === 'number' ? `${expectedCost} 点` : expectedCost}</span>
-              <button className="grid h-8 w-8 place-items-center rounded-full text-neutral-600 hover:bg-neutral-100" title="语音输入" type="button">
-                <Mic size={18} />
-              </button>
-              <button
-                type="button"
-                onClick={submit}
-                disabled={!!inProgress || createImage.isPending || createVideo.isPending || createText.isPending}
-                className="grid h-10 w-10 place-items-center rounded-full bg-neutral-950 text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
-                title="生成"
-              >
-                {inProgress || createImage.isPending || createVideo.isPending || createText.isPending ? <Loader2 size={18} className="animate-spin" /> : <ArrowUp size={19} />}
-              </button>
-            </div>
-          </div>
-          {attachments.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {attachments.map((item) => (
-                <div key={item.id} className="group relative h-14 w-14 overflow-hidden rounded-[12px] bg-neutral-100">
-                  <img src={item.dataUrl} alt={item.name} className="h-full w-full object-cover" />
+
+              <div className="mt-4 flex flex-col gap-3 border-t border-[#e6e9ee] pt-4 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => void handleAttachFiles(e.target.files)}
+                  />
+                  <button
+                    className="inline-flex h-9 items-center gap-2 rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#475467] transition hover:border-[#b8c0cc] hover:text-[#101318]"
+                    title="上传参考图"
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Paperclip size={16} />
+                    参考图
+                  </button>
+                  <ComposerSelect
+                    value={activeModelCode}
+                    onChange={(v) => mode === 'video' ? setVideoModel(v) : mode === 'text' ? setTextModel(v) : setImageModel(v)}
+                    options={activeModels.map((m) => ({ value: m.code, label: m.label }))}
+                    wide
+                  />
+                  {mode === 'image' && (
+                    <>
+                      <ComposerSelect value={imageRatio} onChange={(v) => setImageRatio(v as typeof IMAGE_RATIOS[number])} options={IMAGE_RATIOS.map((r) => ({ value: r, label: r }))} />
+                      <ComposerSelect value={imageResolution} onChange={(v) => setImageResolution(v as typeof IMAGE_RESOLUTIONS[number])} options={IMAGE_RESOLUTIONS.map((r) => ({ value: r, label: r }))} />
+                      <ComposerSelect value={String(count)} onChange={(v) => setCount(Number(v))} options={[1, 2, 4].map((n) => ({ value: String(n), label: `${n}张` }))} />
+                    </>
+                  )}
+                  {mode === 'video' && (
+                    <>
+                      <ComposerSelect value={videoRatio} onChange={(v) => setVideoRatio(v as typeof VIDEO_RATIOS[number])} options={VIDEO_RATIOS.map((r) => ({ value: r, label: r }))} />
+                      <ComposerSelect value={String(duration)} onChange={(v) => setDuration(Number(v) as typeof VIDEO_DURATIONS[number])} options={VIDEO_DURATIONS.map((n) => ({ value: String(n), label: `${n}s` }))} />
+                    </>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center justify-between gap-2 sm:justify-end">
+                  <span className="hidden h-10 items-center rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#475467] sm:inline-flex">
+                    预计 {typeof expectedCost === 'number' ? `${expectedCost} 点` : expectedCost}
+                  </span>
+                  <button className="grid h-10 w-10 place-items-center rounded-[8px] border border-[#d7dde5] bg-white text-[#667085] transition hover:text-[#101318]" title="语音输入" type="button">
+                    <Mic size={17} />
+                  </button>
                   <button
                     type="button"
-                    onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== item.id))}
-                    className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/60 text-white opacity-0 transition group-hover:opacity-100"
-                    title="移除"
+                    onClick={submit}
+                    disabled={isBusy}
+                    className="inline-flex h-11 min-w-[124px] items-center justify-center gap-2 rounded-[8px] bg-[#101318] px-4 text-[14px] text-white transition hover:bg-[#2a2f38] disabled:cursor-not-allowed disabled:bg-[#c8ced7]"
+                    title={modeActionLabel(mode)}
                   >
-                    <X size={12} />
+                    {isBusy ? <Loader2 size={18} className="animate-spin" /> : <ArrowUp size={18} />}
+                    {modeActionLabel(mode)}
                   </button>
                 </div>
-              ))}
+              </div>
+              </div>
+              </div>
+            </BorderGlow>
+          </div>
+        </section>
+
+        <section className="mt-10">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="dapo-section-title text-[22px] text-white">我的作品</h2>
+              <p className="mt-1 text-[14px] text-white/58">生成后的图片和视频会在这里沉淀。</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <ComposerSelect
+                value={String(historyPageSize)}
+                onChange={(v) => setHistoryPageSize(Number(v) as typeof HISTORY_PAGE_SIZES[number])}
+                options={HISTORY_PAGE_SIZES.map((n) => ({ value: String(n), label: `${n}个` }))}
+              />
+              <HistoryActionMenu
+                disabled={!token || deleteHistory.isPending}
+                onDeleteBefore3Days={() => {
+                  if (window.confirm('确定删除3天前的作品记录吗？')) {
+                    deleteHistory.mutate('before_3d');
+                  }
+                }}
+                onDeleteBefore7Days={() => {
+                  if (window.confirm('确定删除7天前的作品记录吗？')) {
+                    deleteHistory.mutate('before_7d');
+                  }
+                }}
+                onDeleteAll={() => {
+                  if (window.confirm('确定删除全部作品记录吗？已完成、失败和退款记录都会从首页移除。')) {
+                    deleteHistory.mutate('all');
+                  }
+                }}
+              />
+            </div>
+          </div>
+          {resultItems.length === 0 ? (
+            <div className="grid min-h-[220px] place-items-center rounded-[8px] border border-dashed border-white/16 bg-white/8 text-white/62 backdrop-blur">
+              <div className="flex flex-col items-center gap-2 text-center">
+                <FileImage size={28} />
+                <p className="text-[14px]">{token ? '还没有作品，先生成一张图片吧' : '登录后会在这里显示你的作品'}</p>
+              </div>
+            </div>
+          ) : (
+            <div
+              className="columns-1 gap-3 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5"
+              style={{ columnWidth: '220px' }}
+            >
+              {resultItems.map((item) => <WorkCard key={item.task_id} item={item} onOpen={setPreview} />)}
             </div>
           )}
-        </div>
-      </section>
-
-      {mode === 'text' && textResult && (
-        <section className="mx-auto mt-8 max-w-[760px] rounded-[24px] border border-neutral-200 bg-white p-5 text-[15px] leading-7 text-neutral-800 shadow-sm">
-          <div className="mb-3 flex items-center justify-between text-sm text-neutral-400">
-            <span>{textModels.find((m) => m.code === textModel)?.label ?? textModel}</span>
-            <span>{textResult.length} 字</span>
-          </div>
-          <div className="whitespace-pre-wrap">{textResult}</div>
         </section>
-      )}
-
-      <section className="mx-auto mt-12 max-w-[760px]">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-[20px] font-medium text-neutral-950">创建{modeTitle(mode)}</h2>
-          <div className="flex items-center gap-2 text-neutral-400">
-            <button className="grid h-9 w-9 place-items-center rounded-full border border-neutral-200 hover:text-neutral-900"><ChevronLeft size={18} /></button>
-            <button className="grid h-9 w-9 place-items-center rounded-full border border-neutral-200 hover:text-neutral-900"><ChevronRight size={18} /></button>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-          {promptGalleryCards.map((item) => (
-            <button
-              key={`${item.id ?? item.title}-${item.title}`}
-              type="button"
-              onClick={() => fillPromptFromCard(item)}
-              className="group relative aspect-[4/5] overflow-hidden rounded-[22px] text-left shadow-sm"
-            >
-              <img src={item.image} alt={item.title} className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" loading="lazy" />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
-              <span className="absolute bottom-3 left-3 right-3 text-sm font-medium text-white">{item.title}</span>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="mt-14">
-        <div className="mx-auto mb-4 flex max-w-[1500px] items-center justify-between gap-3 px-0">
-          <h2 className="text-[20px] font-medium text-neutral-950">我的作品</h2>
-          <div className="flex items-center gap-2">
-            <ComposerSelect
-              value={String(historyPageSize)}
-              onChange={(v) => setHistoryPageSize(Number(v) as typeof HISTORY_PAGE_SIZES[number])}
-              options={HISTORY_PAGE_SIZES.map((n) => ({ value: String(n), label: `${n}个` }))}
-            />
-            <HistoryActionMenu
-              disabled={!token || deleteHistory.isPending}
-              onDeleteBefore3Days={() => {
-                if (window.confirm('确定删除3天前的作品记录吗？')) {
-                  deleteHistory.mutate('before_3d');
-                }
-              }}
-              onDeleteBefore7Days={() => {
-                if (window.confirm('确定删除7天前的作品记录吗？')) {
-                  deleteHistory.mutate('before_7d');
-                }
-              }}
-              onDeleteAll={() => {
-                if (window.confirm('确定删除全部作品记录吗？已完成、失败和退款记录都会从首页移除。')) {
-                  deleteHistory.mutate('all');
-                }
-              }}
-            />
-          </div>
-        </div>
-        {resultItems.length === 0 ? (
-          <div className="mx-auto grid max-w-[1500px] place-items-center rounded-[24px] border border-dashed border-neutral-200 py-14 text-neutral-400">
-            <FileImage size={28} />
-            <p className="mt-2 text-sm">{token ? '还没有作品，先生成一张图片吧' : '登录后会在这里显示你的作品'}</p>
-          </div>
-        ) : (
-          <div
-            className="mx-auto max-w-[1500px] columns-1 gap-3 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5"
-            style={{ columnWidth: '220px' }}
-          >
-            {resultItems.map((item) => <WorkCard key={item.task_id} item={item} onOpen={setPreview} />)}
-          </div>
-        )}
-      </section>
-      {preview && <PreviewLightbox preview={preview} onClose={() => setPreview(null)} />}
+        {preview && <PreviewLightbox preview={preview} onClose={() => setPreview(null)} />}
+      </div>
     </div>
   );
 }
 
-function ModeSwitch({ mode, onChange }: { mode: StudioMode; onChange: (mode: StudioMode) => void }) {
+function DevelopmentStage({
+  mode,
+  task,
+  textResult,
+  activeModelLabel,
+  attachmentsCount,
+  maxAttachments,
+  expectedCost,
+  inProgress,
+  onOpen,
+}: {
+  mode: StudioMode;
+  task: GenerationTask | null;
+  textResult: string;
+  activeModelLabel: string;
+  attachmentsCount: number;
+  maxAttachments: number;
+  expectedCost: string | number;
+  inProgress: boolean;
+  onOpen: (preview: { url: string; type: 'image' | 'video'; title: string }) => void;
+}) {
+  const activeItem = task;
+  const media = activeItem?.results?.[0];
+  const isVideo = activeItem?.kind === 'video';
+  const canOpen = activeItem?.status === 2 && !!media?.url;
+
   return (
-    <div className="inline-flex rounded-full bg-neutral-100 p-1">
-      {MODES.map((m) => {
-        const Icon = m.icon;
-        return (
-          <button
-            key={m.value}
-            type="button"
-            onClick={() => onChange(m.value)}
-            className={clsx(
-              'inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-sm transition',
-              mode === m.value ? 'bg-white text-neutral-950 shadow-sm' : 'text-neutral-600 hover:text-neutral-950',
-            )}
-          >
-            <Icon size={15} />
-            {m.label}
-          </button>
-        );
-      })}
+    <section className="dapo-development-stage relative text-white">
+      <div className="relative z-10">
+        <div className="dapo-stage-frame relative flex">
+          {mode === 'text' && textResult ? (
+            <div className="dapo-result-shell">
+              <div className="max-h-[420px] w-full overflow-auto rounded-[8px] border border-white/12 bg-black/54 p-5 text-[14px] leading-7 text-white/76 backdrop-blur sm:p-6">
+                <div className="mb-3 text-[12px] text-white/46">{textResult.length} 字</div>
+                <div className="whitespace-pre-wrap">{textResult}</div>
+              </div>
+              <ParameterStrip
+                mode={mode}
+                activeModelLabel={activeModelLabel}
+                attachmentsCount={attachmentsCount}
+                maxAttachments={maxAttachments}
+                expectedCost={expectedCost}
+                className="dapo-result-meta"
+              />
+            </div>
+          ) : media?.url ? (
+            <div className="dapo-result-shell">
+              <button
+                type="button"
+                disabled={!canOpen}
+                onClick={() => canOpen && onOpen({ url: media.url, type: isVideo ? 'video' : 'image', title: activeItem?.model ?? activeModelLabel })}
+                className={clsx('group relative w-full overflow-hidden rounded-[8px] bg-[#101318]', canOpen && 'cursor-zoom-in')}
+              >
+                {isVideo ? (
+                  media.thumb_url ? (
+                    <img src={media.thumb_url} alt="" className="h-full min-h-[390px] w-full object-contain" />
+                  ) : (
+                    <video src={media.url} className="h-full min-h-[390px] w-full object-contain" muted playsInline preload="metadata" />
+                  )
+                ) : (
+                  <img src={media.url} alt="" className="h-full min-h-[390px] w-full object-contain" />
+                )}
+                <div className="absolute inset-0 bg-black/0 transition group-hover:bg-black/16" />
+                {canOpen && (
+                  <span className="absolute right-3 top-3 grid h-10 w-10 place-items-center rounded-[8px] bg-white/92 text-[#101318] opacity-0 shadow-sm transition group-hover:opacity-100">
+                    {isVideo ? <Play size={18} fill="currentColor" /> : <Maximize2 size={18} />}
+                  </span>
+                )}
+              </button>
+              <ParameterStrip
+                mode={mode}
+                activeModelLabel={activeModelLabel}
+                attachmentsCount={attachmentsCount}
+                maxAttachments={maxAttachments}
+                expectedCost={expectedCost}
+                className="dapo-result-meta"
+              />
+            </div>
+          ) : inProgress ? (
+            <div className="relative min-h-[390px] w-full">
+              <GeneratingDots />
+            </div>
+          ) : (
+            <div className="dapo-ascii-stage">
+              <Suspense fallback={null}>
+                <ASCIIText text="让每一个灵感显影" enableWaves asciiFontSize={8} />
+              </Suspense>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ParameterStrip({
+  mode,
+  activeModelLabel,
+  attachmentsCount,
+  maxAttachments,
+  expectedCost,
+  className,
+}: {
+  mode: StudioMode;
+  activeModelLabel: string;
+  attachmentsCount: number;
+  maxAttachments: number;
+  expectedCost: string | number;
+  className?: string;
+}) {
+  const costLabel = typeof expectedCost === 'number' ? `${expectedCost} 点` : expectedCost;
+  const items: Array<[string, string]> = [
+    ['入口', modeTitle(mode)],
+    ['模型', activeModelLabel],
+    ['参考素材', `${attachmentsCount}/${maxAttachments}`],
+    ['预计消耗', costLabel],
+  ];
+
+  return (
+    <div className={clsx('dapo-param-strip', className)}>
+      {items.map(([label, value]) => (
+        <div key={label} className="dapo-param-strip__item">
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PromptGalleryRail({ cards, onPick }: { cards: PromptGalleryCard[]; onPick: (card: PromptGalleryCard) => void }) {
+  const items = cards.map((card) => ({
+    id: String(card.id ?? card.title),
+    title: card.title,
+    subtitle: card.subtitle,
+    image: card.image,
+    prompt: card.prompt,
+  }));
+
+  return (
+    <div className="mt-4">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <p className="text-[13px] text-white/68">快捷提示词</p>
+        <p className="hidden text-[12px] text-white/42 sm:block">横向滑动查看</p>
+      </div>
+      <CircularGallery
+        items={items}
+        onSelect={(item) => {
+          if (!item.prompt) return;
+          onPick({
+            title: item.title,
+            subtitle: item.subtitle,
+            image: item.image,
+            prompt: item.prompt,
+          });
+        }}
+      />
     </div>
   );
 }
@@ -647,10 +804,10 @@ function ComposerSelect({ value, options, onChange, disabled, wide }: { value: s
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
         className={clsx(
-          'inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-sm text-sky-500 outline-none transition',
+          'inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#2156d9] outline-none transition',
           wide && 'min-w-[150px] justify-between',
-          open ? 'bg-sky-50' : 'hover:bg-neutral-100',
-          disabled && 'cursor-not-allowed text-neutral-400 hover:bg-transparent',
+          open ? 'border-[#a9b8f4] bg-[#f6f8ff]' : 'hover:border-[#b8c0cc]',
+          disabled && 'cursor-not-allowed text-[#98a2b3] hover:border-[#d7dde5]',
         )}
       >
         <span>{current?.label}</span>
@@ -658,7 +815,7 @@ function ComposerSelect({ value, options, onChange, disabled, wide }: { value: s
       </button>
 
       {open && !disabled && (
-        <div className={clsx('absolute left-0 top-10 z-30 overflow-hidden rounded-[18px] border border-neutral-200 bg-white p-1.5 shadow-[0_18px_50px_rgba(15,23,42,.14)]', wide ? 'min-w-[190px]' : 'min-w-[132px]')}>
+        <div className={clsx('absolute left-0 top-11 z-30 overflow-hidden rounded-[8px] border border-[#dfe3e8] bg-white p-1.5 shadow-[0_18px_50px_rgba(15,23,42,.14)]', wide ? 'min-w-[210px]' : 'min-w-[132px]')}>
           {options.map((o) => {
             const selected = o.value === value;
             return (
@@ -671,8 +828,8 @@ function ComposerSelect({ value, options, onChange, disabled, wide }: { value: s
                   setOpen(false);
                 }}
                 className={clsx(
-                  'flex h-10 w-full items-center justify-between gap-3 rounded-[12px] px-3 text-left text-sm transition',
-                  selected ? 'bg-neutral-100 text-neutral-950' : 'text-neutral-600 hover:bg-neutral-50 hover:text-neutral-950',
+                  'flex h-10 w-full items-center justify-between gap-3 rounded-[7px] px-3 text-left text-[13px] transition',
+                  selected ? 'bg-[#f1f4f8] text-[#101318]' : 'text-[#667085] hover:bg-[#f6f7f8] hover:text-[#101318]',
                 )}
               >
                 <span>{o.label}</span>
@@ -709,13 +866,13 @@ function HistoryActionMenu({
         type="button"
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-sm text-neutral-600 outline-none transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-300"
+        className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#667085] outline-none transition hover:text-[#101318] disabled:cursor-not-allowed disabled:text-[#c8ced7]"
       >
         <MoreHorizontal size={16} />
         管理
       </button>
       {open && !disabled && (
-        <div className="absolute right-0 top-10 z-30 min-w-[150px] overflow-hidden rounded-[18px] border border-neutral-200 bg-white p-1.5 shadow-[0_18px_50px_rgba(15,23,42,.14)]">
+        <div className="absolute right-0 top-11 z-30 min-w-[150px] overflow-hidden rounded-[8px] border border-[#dfe3e8] bg-white p-1.5 shadow-[0_18px_50px_rgba(15,23,42,.14)]">
           <button
             type="button"
             onMouseDown={(e) => e.preventDefault()}
@@ -723,7 +880,7 @@ function HistoryActionMenu({
               setOpen(false);
               onDeleteBefore3Days();
             }}
-            className="flex h-10 w-full items-center gap-2 rounded-[12px] px-3 text-left text-sm text-neutral-700 transition hover:bg-neutral-50"
+            className="flex h-10 w-full items-center gap-2 rounded-[7px] px-3 text-left text-[13px] text-[#475467] transition hover:bg-[#f6f7f8]"
           >
             <Trash2 size={15} />
             删除3天前
@@ -735,7 +892,7 @@ function HistoryActionMenu({
               setOpen(false);
               onDeleteBefore7Days();
             }}
-            className="flex h-10 w-full items-center gap-2 rounded-[12px] px-3 text-left text-sm text-neutral-700 transition hover:bg-neutral-50"
+            className="flex h-10 w-full items-center gap-2 rounded-[7px] px-3 text-left text-[13px] text-[#475467] transition hover:bg-[#f6f7f8]"
           >
             <Trash2 size={15} />
             删除7天前
@@ -747,7 +904,7 @@ function HistoryActionMenu({
               setOpen(false);
               onDeleteAll();
             }}
-            className="flex h-10 w-full items-center gap-2 rounded-[12px] px-3 text-left text-sm text-red-600 transition hover:bg-red-50"
+            className="flex h-10 w-full items-center gap-2 rounded-[7px] px-3 text-left text-[13px] text-red-600 transition hover:bg-red-50"
           >
             <Trash2 size={15} />
             删除全部
@@ -782,14 +939,14 @@ function WorkCard({ item, onOpen }: { item: GenerationTask; onOpen: (preview: { 
   };
 
   return (
-    <article className="mb-3 break-inside-avoid overflow-hidden rounded-[6px] bg-neutral-100">
+    <article className="mb-3 break-inside-avoid overflow-hidden rounded-[8px] border border-[#dfe3e8] bg-white shadow-sm">
       <button
         type="button"
         disabled={!canOpen}
         onClick={() => original && onOpen({ url: original, type: isVideo ? 'video' : 'image', title: item.model })}
         style={{ aspectRatio: mediaRatio }}
         className={clsx(
-          'relative grid w-full place-items-center overflow-hidden text-neutral-400 transition-[height]',
+          'relative grid w-full place-items-center overflow-hidden bg-[#eef1f5] text-[#667085] transition-[height]',
           !original && item.status === 1 && 'bg-white',
           canOpen && 'group cursor-zoom-in',
         )}
@@ -826,7 +983,7 @@ function WorkCard({ item, onOpen }: { item: GenerationTask; onOpen: (preview: { 
             <span>{statusText(item.status)}</span>
           </div>
         )}
-        <div className="absolute left-2 top-2 rounded-full bg-black/55 px-2 py-0.5 text-xs text-white">{item.kind === 'video' ? '\u89c6\u9891' : '\u56fe\u7247'}</div>
+        <div className="absolute left-2 top-2 rounded-[7px] bg-black/58 px-2 py-0.5 text-[11px] text-white">{item.kind === 'video' ? '\u89c6\u9891' : '\u56fe\u7247'}</div>
         {canOpen && (
           <div className="absolute inset-0 grid place-items-center bg-black/0 opacity-0 transition group-hover:bg-black/20 group-hover:opacity-100">
             <span className="grid h-10 w-10 place-items-center rounded-full bg-white/90 text-neutral-950 shadow-sm">
@@ -835,9 +992,9 @@ function WorkCard({ item, onOpen }: { item: GenerationTask; onOpen: (preview: { 
           </div>
         )}
       </button>
-      <div className="flex items-center gap-1.5 px-2.5 py-2 text-xs text-neutral-500">
+      <div className="flex items-center gap-1.5 px-2.5 py-2 text-[12px] text-[#667085]">
         <span className="shrink-0">{fmtRelative(item.created_at)}</span>
-        {prompt && <span className="truncate text-neutral-600">{prompt}</span>}
+        {prompt && <span className="truncate text-[#475467]">{prompt}</span>}
       </div>
     </article>
   );
@@ -910,6 +1067,18 @@ function modeTitle(mode: StudioMode) {
   if (mode === 'video') return '视频';
   if (mode === 'text') return '文字';
   return '图片';
+}
+
+function modeActionLabel(mode: StudioMode) {
+  if (mode === 'video') return '生成视频';
+  if (mode === 'text') return '生成文字';
+  return '生成图片';
+}
+
+function promptPlaceholder(mode: StudioMode) {
+  if (mode === 'video') return '描述镜头、主体、运动方式、时长感和画面比例。例如：一支高级产品揭幕短片，慢速推近，柔和棚拍灯光，背景干净...';
+  if (mode === 'text') return '写下你要生成的文字任务。例如：为一个新消费品牌写 5 组克制、有记忆点的产品卖点文案...';
+  return '描述你想生成的画面。例如：一张极简产品广告海报，白色展台，柔和棚拍光，克制排版，高级商业摄影质感...';
 }
 
 function statusText(status: number) {

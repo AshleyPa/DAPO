@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/kleinai/backend/internal/model"
 )
@@ -21,6 +22,10 @@ func NewWalletRepo(db *gorm.DB) *WalletRepo { return &WalletRepo{db: db} }
 // ErrInsufficient 余额不足。
 var ErrInsufficient = errors.New("repo: insufficient points")
 
+// ErrDuplicateBiz means a wallet operation with the same business key has
+// already been recorded and should be treated as idempotent by callers.
+var ErrDuplicateBiz = errors.New("repo: duplicate wallet business key")
+
 // Income 在事务中给用户加点 + 写入流水。
 func (r *WalletRepo) Income(ctx context.Context, userID uint64, biz, bizID string, points int64, remark string) (*model.WalletLog, error) {
 	if points <= 0 {
@@ -28,31 +33,57 @@ func (r *WalletRepo) Income(ctx context.Context, userID uint64, biz, bizID strin
 	}
 	var log *model.WalletLog
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		u, err := lockUser(tx, userID)
-		if err != nil {
-			return err
-		}
-		before := u.Points
-		after := before + points
-		if err := tx.Model(&model.User{}).Where("id = ?", userID).
-			UpdateColumn("points", after).Error; err != nil {
-			return err
-		}
-		log = &model.WalletLog{
-			UserID:       userID,
-			Direction:    1,
-			BizType:      biz,
-			BizID:        bizID,
-			Points:       points,
-			PointsBefore: before,
-			PointsAfter:  after,
-		}
-		if remark != "" {
-			log.Remark = &remark
-		}
-		return tx.Create(log).Error
+		var err error
+		log, err = r.IncomeTx(ctx, tx, userID, biz, bizID, points, remark)
+		return err
 	})
 	return log, err
+}
+
+// IncomeTx gives a user points inside an existing transaction. The (biz,
+// bizID) pair is treated as the idempotency key.
+func (r *WalletRepo) IncomeTx(ctx context.Context, tx *gorm.DB, userID uint64, biz, bizID string, points int64, remark string) (*model.WalletLog, error) {
+	if points <= 0 {
+		return nil, errors.New("income points must >0")
+	}
+	u, err := lockUser(tx.WithContext(ctx), userID)
+	if err != nil {
+		return nil, err
+	}
+	var existing model.WalletLog
+	if err := tx.WithContext(ctx).
+		Where("biz_type = ? AND biz_id = ?", biz, bizID).
+		First(&existing).Error; err == nil {
+		return &existing, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	before := u.Points
+	after := before + points
+	if err := tx.WithContext(ctx).Model(&model.User{}).Where("id = ?", userID).
+		UpdateColumn("points", after).Error; err != nil {
+		return nil, err
+	}
+	log := &model.WalletLog{
+		UserID:       userID,
+		Direction:    1,
+		BizType:      biz,
+		BizID:        bizID,
+		Points:       points,
+		PointsBefore: before,
+		PointsAfter:  after,
+	}
+	if remark != "" {
+		log.Remark = &remark
+	}
+	if err := tx.WithContext(ctx).Create(log).Error; err != nil {
+		if isDuplicateKey(err) {
+			return nil, ErrDuplicateBiz
+		}
+		return nil, err
+	}
+	return log, nil
 }
 
 // Freeze 预冻结：从 points 扣，写入 frozen_points + wallet_log（dir=-1 / status=frozen 由 service 控制）。
@@ -334,9 +365,18 @@ func (r *WalletRepo) ListAdminLogs(ctx context.Context, f AdminWalletLogFilter) 
 // lockUser SELECT ... FOR UPDATE。
 func lockUser(tx *gorm.DB, userID uint64) (*model.User, error) {
 	var u model.User
-	if err := tx.Set("gorm:query_option", "FOR UPDATE").
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ?", userID).First(&u).Error; err != nil {
 		return nil, err
 	}
 	return &u, nil
+}
+
+func isDuplicateKey(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Error 1062") || strings.Contains(msg, "Duplicate entry") ||
+		strings.Contains(strings.ToLower(msg), "unique constraint")
 }

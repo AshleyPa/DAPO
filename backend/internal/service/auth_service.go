@@ -23,14 +23,15 @@ import (
 
 // AuthService 用户认证。
 type AuthService struct {
-	db   *gorm.DB
-	user *repo.UserRepo
-	jwt  *jwtx.Manager
+	db       *gorm.DB
+	user     *repo.UserRepo
+	jwt      *jwtx.Manager
+	verifier *EmailVerificationService
 }
 
 // NewAuthService 构造。
-func NewAuthService(db *gorm.DB, userRepo *repo.UserRepo, jwt *jwtx.Manager) *AuthService {
-	return &AuthService{db: db, user: userRepo, jwt: jwt}
+func NewAuthService(db *gorm.DB, userRepo *repo.UserRepo, jwt *jwtx.Manager, verifier *EmailVerificationService) *AuthService {
+	return &AuthService{db: db, user: userRepo, jwt: jwt, verifier: verifier}
 }
 
 var (
@@ -40,31 +41,26 @@ var (
 
 // Register 用户注册（事务内创建用户 + 邀请关系 + 注册赠点流水可在后续扩展）。
 func (s *AuthService) Register(ctx context.Context, req *dto.RegisterReq, ip string) (*model.User, *dto.TokenPair, error) {
-	account := strings.TrimSpace(req.Account)
-	if account == "" {
-		return nil, nil, errcode.InvalidParam
+	account := strings.ToLower(strings.TrimSpace(req.Account))
+	if !emailRe.MatchString(account) {
+		return nil, nil, errcode.InvalidParam.WithMsg("请使用邮箱注册")
 	}
+	if s.verifier == nil {
+		return nil, nil, errcode.Internal.WithMsg("邮箱验证服务未初始化")
+	}
+	now := time.Now().UTC()
 
 	user := &model.User{
-		UUID:       uuid.NewString(),
-		Status:     1,
-		PlanCode:   "free",
-		InviteCode: genInviteCode(),
-		RegisterIP: &ip,
+		UUID:            uuid.NewString(),
+		Status:          1,
+		PlanCode:        "free",
+		InviteCode:      genInviteCode(),
+		RegisterIP:      &ip,
+		EmailVerifiedAt: &now,
 	}
-
-	switch {
-	case emailRe.MatchString(account):
-		e := strings.ToLower(account)
-		user.Email = &e
-		if username := defaultUsername(e); username != "" {
-			user.Username = &username
-		}
-	case phoneRe.MatchString(account):
-		p := account
-		user.Phone = &p
-	default:
-		user.Username = &account
+	user.Email = &account
+	if username := defaultUsername(account); username != "" {
+		user.Username = &username
 	}
 
 	hash, err := crypto.HashPassword(req.Password)
@@ -80,6 +76,9 @@ func (s *AuthService) Register(ctx context.Context, req *dto.RegisterReq, ip str
 	}
 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.verifier.ConsumeTx(ctx, tx, account, model.EmailVerificationSceneRegister, req.Code); err != nil {
+			return err
+		}
 		if err := tx.Create(user).Error; err != nil {
 			return wrapDup(err)
 		}
@@ -107,7 +106,11 @@ func (s *AuthService) Register(ctx context.Context, req *dto.RegisterReq, ip str
 
 // Login 登录。
 func (s *AuthService) Login(ctx context.Context, req *dto.LoginReq, ip string) (*model.User, *dto.TokenPair, error) {
-	u, err := s.user.GetByAccount(ctx, req.Account)
+	account := strings.TrimSpace(req.Account)
+	if emailRe.MatchString(account) {
+		account = strings.ToLower(account)
+	}
+	u, err := s.user.GetByAccount(ctx, account)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			return nil, nil, errcode.UserNotFound
@@ -144,6 +147,9 @@ func (s *AuthService) Refresh(ctx context.Context, refresh string) (*dto.TokenPa
 	if !u.IsActive() {
 		return nil, errcode.Forbidden
 	}
+	if cl.TokenVersion != u.TokenVersion {
+		return nil, errcode.TokenInvalid
+	}
 	return s.issue(u)
 }
 
@@ -163,14 +169,69 @@ func (s *AuthService) ChangePassword(ctx context.Context, uid uint64, req *dto.C
 	return s.user.UpdatePassword(ctx, uid, hash)
 }
 
+// SendEmailCode 发送注册/找回密码邮箱验证码。
+func (s *AuthService) SendEmailCode(ctx context.Context, req *dto.SendEmailCodeReq, ip string) error {
+	if s.verifier == nil {
+		return errcode.Internal.WithMsg("邮箱验证服务未初始化")
+	}
+	return s.verifier.SendCode(ctx, req, ip)
+}
+
+// ResetPassword 通过邮箱验证码重置密码。
+func (s *AuthService) ResetPassword(ctx context.Context, req *dto.ResetPasswordReq) error {
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if !emailRe.MatchString(email) {
+		return errcode.InvalidParam.WithMsg("请输入有效邮箱")
+	}
+	if s.verifier == nil {
+		return errcode.Internal.WithMsg("邮箱验证服务未初始化")
+	}
+	hash, err := crypto.HashPassword(req.Password)
+	if err != nil {
+		return errcode.Internal.Wrap(err)
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.verifier.ConsumeTx(ctx, tx, email, model.EmailVerificationSceneResetPassword, req.Code); err != nil {
+			return err
+		}
+		var u model.User
+		if err := tx.Where("email = ? AND deleted_at IS NULL", email).First(&u).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errcode.UserNotFound
+			}
+			return errcode.DBError.Wrap(err)
+		}
+		if !u.IsActive() {
+			return errcode.Forbidden.WithMsg("账号已停用")
+		}
+		if err := tx.Model(&model.User{}).
+			Where("id = ?", u.ID).
+			Updates(map[string]any{
+				"password":      hash,
+				"token_version": gorm.Expr("token_version + 1"),
+			}).Error; err != nil {
+			return errcode.DBError.Wrap(err)
+		}
+		return nil
+	})
+}
+
+// Logout invalidates all currently issued user tokens for the account.
+func (s *AuthService) Logout(ctx context.Context, uid uint64) error {
+	if err := s.user.IncrementTokenVersion(ctx, uid); err != nil {
+		return errcode.DBError.Wrap(err)
+	}
+	return nil
+}
+
 // issue 颁发 access + refresh。
 func (s *AuthService) issue(u *model.User) (*dto.TokenPair, error) {
 	jti := uuid.NewString()
-	access, accExp, err := s.jwt.IssueAccess(u.ID, jwtx.SubjectUser, jti, []string{u.PlanCode})
+	access, accExp, err := s.jwt.IssueAccess(u.ID, jwtx.SubjectUser, jti, []string{u.PlanCode}, u.TokenVersion)
 	if err != nil {
 		return nil, errcode.Internal.Wrap(err)
 	}
-	refresh, refExp, err := s.jwt.IssueRefresh(u.ID, jwtx.SubjectUser, jti)
+	refresh, refExp, err := s.jwt.IssueRefresh(u.ID, jwtx.SubjectUser, jti, u.TokenVersion)
 	if err != nil {
 		return nil, errcode.Internal.Wrap(err)
 	}

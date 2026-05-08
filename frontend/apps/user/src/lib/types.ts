@@ -193,3 +193,35 @@ export interface RedeemCDKResp {
   biz: string;
   message: string;
 }
+
+export interface MessageResp {
+  message: string;
+}
+
+export interface RechargePackage {
+  id: string;
+  name: string;
+  amount: number;
+  points: number;
+  bonus_points: number;
+  total_points: number;
+  badge?: string;
+  remark?: string;
+  sort_order: number;
+}
+
+export type RechargeStatus = 0 | 1 | 2 | 3 | 4 | number;
+
+export interface RechargeOrder {
+  id: number;
+  order_no: string;
+  channel: string;
+  amount: number;
+  points: number;
+  bonus_points: number;
+  total_points: number;
+  status: RechargeStatus;
+  qr_code?: string;
+  paid_at?: number;
+  created_at: number;
+}

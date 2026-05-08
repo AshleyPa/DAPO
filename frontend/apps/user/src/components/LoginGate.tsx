@@ -19,7 +19,8 @@ type LoginValues = z.infer<typeof loginSchema>;
 
 const registerSchema = z
   .object({
-    account: z.string().min(3, '账号至少 3 位').max(64, '账号过长'),
+    account: z.string().email('请输入有效邮箱').max(128, '邮箱过长'),
+    code: z.string().regex(/^\d{6}$/, '请输入 6 位验证码'),
     password: z
       .string()
       .min(8, '密码至少 8 位')
@@ -182,6 +183,9 @@ function LoginForm({ onDone }: { onDone: () => void }) {
       <button className="btn btn-primary btn-lg btn-block h-14 text-[17px]" type="submit" disabled={isSubmitting}>
         {isSubmitting ? '登录中...' : '登录'}
       </button>
+      <div className="text-right">
+        <a href="/forgot" className="text-small text-neutral-500 hover:text-neutral-950">忘记密码？</a>
+      </div>
     </form>
   );
 }
@@ -193,17 +197,47 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
   const {
     register,
     handleSubmit,
+    getValues,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<RegisterValues>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { account: '', password: '', confirm: '', invite_code: '' },
+    defaultValues: { account: '', code: '', password: '', confirm: '', invite_code: '' },
   });
+  const [sendingCode, setSendingCode] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const emailValue = watch('account');
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = window.setTimeout(() => setCooldown((v) => Math.max(0, v - 1)), 1000);
+    return () => window.clearTimeout(t);
+  }, [cooldown]);
+
+  const sendCode = async () => {
+    const email = getValues('account').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast.error('请先填写有效邮箱');
+      return;
+    }
+    try {
+      setSendingCode(true);
+      await authApi.sendEmailCode({ email, scene: 'register' });
+      setCooldown(60);
+      toast.success('验证码已发送，请查看邮箱');
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : '验证码发送失败');
+    } finally {
+      setSendingCode(false);
+    }
+  };
 
   const onSubmit = async (v: RegisterValues) => {
     try {
       const resp = await authApi.register({
         account: v.account,
         password: v.password,
+        code: v.code,
         invite_code: v.invite_code || undefined,
       });
       setToken(resp.token);
@@ -220,11 +254,31 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
       <div className="field">
         <input
           className={clsx('input h-14 rounded-2xl text-[15px] font-normal placeholder:font-normal', errors.account && 'input-error')}
-          placeholder="邮箱 / 手机号 / 用户名"
+          placeholder="邮箱"
           autoComplete="username"
           {...register('account')}
         />
         {errors.account && <p className="field-error">{errors.account.message}</p>}
+      </div>
+      <div className="field">
+        <div className="flex gap-2">
+          <input
+            className={clsx('input h-14 rounded-2xl text-[15px] font-normal placeholder:font-normal', errors.code && 'input-error')}
+            placeholder="邮箱验证码"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            {...register('code')}
+          />
+          <button
+            className="btn btn-outline h-14 shrink-0 rounded-2xl px-4 text-[14px]"
+            type="button"
+            disabled={sendingCode || cooldown > 0 || !emailValue}
+            onClick={sendCode}
+          >
+            {cooldown > 0 ? `${cooldown}s` : sendingCode ? '发送中' : '获取验证码'}
+          </button>
+        </div>
+        {errors.code && <p className="field-error">{errors.code.message}</p>}
       </div>
       <div className="field">
         <input

@@ -10,10 +10,13 @@ import type {
   GenerationTask,
   LoginResp,
   MeResp,
+  MessageResp,
   PageData,
   PromptGalleryItem,
   PublicModel,
   RedeemCDKResp,
+  RechargeOrder,
+  RechargePackage,
   RegisterResp,
   TextGenerationResp,
   TokenPair,
@@ -21,10 +24,14 @@ import type {
 } from './types';
 
 export const authApi = {
-  register: (body: { account: string; password: string; invite_code?: string }) =>
+  register: (body: { account: string; password: string; code: string; invite_code?: string }) =>
     request<RegisterResp>({ method: 'POST', url: '/auth/register', data: body }),
   login: (body: { account: string; password: string }) =>
     request<LoginResp>({ method: 'POST', url: '/auth/login', data: body }),
+  sendEmailCode: (body: { email: string; scene: 'register' | 'reset_password' }) =>
+    request<MessageResp>({ method: 'POST', url: '/auth/email/code', data: body }),
+  resetPassword: (body: { email: string; code: string; password: string }) =>
+    request<MessageResp>({ method: 'POST', url: '/auth/password/reset', data: body }),
   refresh: (refresh_token: string) =>
     request<TokenPair>({ method: 'POST', url: '/auth/refresh', data: { refresh_token } }),
   logout: () => request<null>({ method: 'POST', url: '/auth/logout' }),
@@ -51,15 +58,50 @@ export const keysApi = {
 };
 
 export const billingApi = {
+  packages: async () => {
+    const r = await request<{ list: RechargePackage[] } | RechargePackage[] | null>({
+      method: 'GET',
+      url: '/billing/recharge/packages',
+    });
+    if (Array.isArray(r)) return r;
+    return r?.list ?? [];
+  },
+  createRechargeOrder: (body: { package_id: string; channel?: 'alipay' }, idemKey = clientIdemKey()) =>
+    request<RechargeOrder>({
+      method: 'POST',
+      url: '/billing/recharge/orders',
+      data: body,
+      headers: { 'Idempotency-Key': idemKey },
+    }),
+  rechargeOrders: (page = 1, pageSize = 20) =>
+    request<PageData<RechargeOrder>>({
+      method: 'GET',
+      url: '/billing/recharge/orders',
+      params: { page, page_size: pageSize },
+    }),
+  rechargeOrder: (orderNo: string) =>
+    request<RechargeOrder>({ method: 'GET', url: `/billing/recharge/orders/${orderNo}` }),
   logs: (page = 1, pageSize = 20) =>
     request<PageData<WalletLog>>({
       method: 'GET',
       url: '/billing/logs',
       params: { page, page_size: pageSize },
     }),
-  redeemCDK: (code: string) =>
-    request<RedeemCDKResp>({ method: 'POST', url: '/billing/cdk/redeem', data: { code } }),
+  redeemCDK: (code: string, idemKey = clientIdemKey()) =>
+    request<RedeemCDKResp>({
+      method: 'POST',
+      url: '/billing/cdk/redeem',
+      data: { code },
+      headers: { 'Idempotency-Key': idemKey },
+    }),
 };
+
+function clientIdemKey() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 export const genApi = {
   models: async () => {

@@ -27,7 +27,7 @@ func NewAdminSystemHandler(svc *service.SystemConfigService) *AdminSystemHandler
 
 // GetSettings GET /admin/api/v1/system/settings
 func (h *AdminSystemHandler) GetSettings(c *gin.Context) {
-	all, err := h.svc.GetAll(c.Request.Context())
+	all, err := h.svc.GetAllMasked(c.Request.Context())
 	if err != nil {
 		response.Fail(c, err)
 		return
@@ -49,11 +49,12 @@ func (h *AdminSystemHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 	uid := middleware.UID(c)
-	if err := h.svc.UpsertMany(c.Request.Context(), body, uid); err != nil {
+	updated, err := h.svc.UpsertManyAdmin(c.Request.Context(), body, uid)
+	if err != nil {
 		response.Fail(c, err)
 		return
 	}
-	response.OK(c, gin.H{"updated": len(body)})
+	response.OK(c, gin.H{"updated": updated})
 }
 
 // CacheStats GET /admin/api/v1/system/cache

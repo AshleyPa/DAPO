@@ -2,10 +2,10 @@
 //
 // 流程（与 docs/02-后端规范.md §6 对齐）：
 //
-//   1. PreDeduct  → wallet.Freeze + 写 consume_record(status=0)
-//   2. (上游调用)
-//   3. Settle     → wallet.Settle  + 更新 consume_record(status=1)
-//   4. Failure    → wallet.Refund  + 更新 consume_record(status=2) + 写 refund_record
+//  1. PreDeduct  → wallet.Freeze + 写 consume_record(status=0)
+//  2. (上游调用)
+//  3. Settle     → wallet.Settle  + 更新 consume_record(status=1)
+//  4. Failure    → wallet.Refund  + 更新 consume_record(status=2) + 写 refund_record
 //
 // 任务 ID（task_id）在调用方生成，应使用 ULID 字符串。
 package service
@@ -183,6 +183,19 @@ func (s *BillingService) FailRefund(ctx context.Context, taskID, reason string) 
 // GrantPoints 赠送 / 兑换码 / 邀请奖励：直接增加点数 + 写流水。
 func (s *BillingService) GrantPoints(ctx context.Context, userID uint64, biz, bizID string, points int64, remark string) error {
 	if _, err := s.wallet.Income(ctx, userID, biz, bizID, points, remark); err != nil {
+		if errors.Is(err, repo.ErrDuplicateBiz) {
+			return nil
+		}
+		return errcode.DBError.Wrap(err)
+	}
+	return nil
+}
+
+// GrantPointsTx grants points inside an outer transaction. It is used by
+// flows such as CDK redemption where marking the code used and crediting the
+// wallet must commit or roll back together.
+func (s *BillingService) GrantPointsTx(ctx context.Context, tx *gorm.DB, userID uint64, biz, bizID string, points int64, remark string) error {
+	if _, err := s.wallet.IncomeTx(ctx, tx, userID, biz, bizID, points, remark); err != nil {
 		return errcode.DBError.Wrap(err)
 	}
 	return nil

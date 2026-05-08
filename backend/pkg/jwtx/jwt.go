@@ -20,11 +20,12 @@ const (
 
 // Claims 自定义负载。
 type Claims struct {
-	UID     uint64   `json:"uid"`
-	Subject Subject  `json:"sub_t"`
-	Roles   []string `json:"roles,omitempty"`
-	Scope   string   `json:"scope,omitempty"`
-	JTI     string   `json:"jti"`
+	UID          uint64   `json:"uid"`
+	Subject      Subject  `json:"sub_t"`
+	Roles        []string `json:"roles,omitempty"`
+	Scope        string   `json:"scope,omitempty"`
+	JTI          string   `json:"jti"`
+	TokenVersion int64    `json:"tv,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -52,13 +53,14 @@ func New(secret, refreshSecret string, accessTTL, refreshTTL time.Duration) (*Ma
 }
 
 // IssueAccess 签发 Access Token。
-func (m *Manager) IssueAccess(uid uint64, sub Subject, jti string, roles []string) (string, time.Time, error) {
+func (m *Manager) IssueAccess(uid uint64, sub Subject, jti string, roles []string, tokenVersion int64) (string, time.Time, error) {
 	exp := time.Now().Add(m.accessTTL)
 	c := Claims{
-		UID:     uid,
-		Subject: sub,
-		Roles:   roles,
-		JTI:     jti,
+		UID:          uid,
+		Subject:      sub,
+		Roles:        roles,
+		JTI:          jti,
+		TokenVersion: tokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    m.issuer,
 			Subject:   fmt.Sprintf("%d", uid),
@@ -73,12 +75,13 @@ func (m *Manager) IssueAccess(uid uint64, sub Subject, jti string, roles []strin
 }
 
 // IssueRefresh 签发 Refresh Token。
-func (m *Manager) IssueRefresh(uid uint64, sub Subject, jti string) (string, time.Time, error) {
+func (m *Manager) IssueRefresh(uid uint64, sub Subject, jti string, tokenVersion int64) (string, time.Time, error) {
 	exp := time.Now().Add(m.refreshTTL)
 	c := Claims{
-		UID:     uid,
-		Subject: sub,
-		JTI:     jti,
+		UID:          uid,
+		Subject:      sub,
+		JTI:          jti,
+		TokenVersion: tokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    m.issuer,
 			Subject:   fmt.Sprintf("%d", uid),

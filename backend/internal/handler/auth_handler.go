@@ -61,6 +61,34 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	})
 }
 
+// SendEmailCode POST /api/v1/auth/email/code
+func (h *AuthHandler) SendEmailCode(c *gin.Context) {
+	var req dto.SendEmailCodeReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.InvalidParam.Wrap(err))
+		return
+	}
+	if err := h.auth.SendEmailCode(c.Request.Context(), &req, c.ClientIP()); err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, gin.H{"message": "验证码已发送"})
+}
+
+// ResetPassword POST /api/v1/auth/password/reset
+func (h *AuthHandler) ResetPassword(c *gin.Context) {
+	var req dto.ResetPasswordReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.InvalidParam.Wrap(err))
+		return
+	}
+	if err := h.auth.ResetPassword(c.Request.Context(), &req); err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, gin.H{"message": "密码已重置"})
+}
+
 // Refresh POST /api/v1/auth/refresh
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	var req dto.RefreshReq
@@ -77,8 +105,12 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 }
 
 // Logout POST /api/v1/auth/logout
-// 当前为无状态实现，前端清空 token 即可；预留接口。
 func (h *AuthHandler) Logout(c *gin.Context) {
+	uid := middleware.MustUID(c)
+	if err := h.auth.Logout(c.Request.Context(), uid); err != nil {
+		response.Fail(c, err)
+		return
+	}
 	response.OK(c, nil)
 }
 

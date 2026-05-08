@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Cloud, CreditCard, Database, RefreshCw, Save, ShieldAlert, Trash2 } from 'lucide-react';
+import { Cloud, CreditCard, Database, GitBranch, RefreshCw, Save, ShieldAlert, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { ApiError } from '../../lib/api';
 import { proxiesApi, systemApi } from '../../lib/services';
-import type { ProxyItem, SystemSettings } from '../../lib/types';
+import type { ProviderRouteRule, ProxyItem, SystemSettings } from '../../lib/types';
 import { toast } from '../../stores/toast';
+import ProviderRoutesEditor, { defaultProviderRoutes, normalizeProviderRoutes, providerRoutesValue } from './ProviderRoutesEditor';
 
 interface FormState {
   retry_max_attempts: number;
@@ -13,6 +14,7 @@ interface FormState {
   retry_timeout_seconds: number;
   tolerance_circuit_failures: number;
   tolerance_circuit_cooldown_seconds: number;
+  provider_routes: ProviderRouteRule[];
   proxy_global_enabled: boolean;
   proxy_selection_mode: 'fixed' | 'random';
   proxy_global_id: number;
@@ -34,6 +36,9 @@ interface FormState {
   payment_notify_url: string;
   alipay_app_id: string;
   alipay_private_key: string;
+  alipay_public_key: string;
+  alipay_gateway_url: string;
+  alipay_subject_prefix: string;
   wechat_mch_id: string;
   wechat_api_v3_key: string;
 }
@@ -44,6 +49,7 @@ const DEFAULT_FORM: FormState = {
   retry_timeout_seconds: 300,
   tolerance_circuit_failures: 3,
   tolerance_circuit_cooldown_seconds: 300,
+  provider_routes: defaultProviderRoutes(),
   proxy_global_enabled: false,
   proxy_selection_mode: 'fixed',
   proxy_global_id: 0,
@@ -65,6 +71,9 @@ const DEFAULT_FORM: FormState = {
   payment_notify_url: '',
   alipay_app_id: '',
   alipay_private_key: '',
+  alipay_public_key: '',
+  alipay_gateway_url: '',
+  alipay_subject_prefix: 'DAPO达波显影-',
   wechat_mch_id: '',
   wechat_api_v3_key: '',
 };
@@ -84,6 +93,7 @@ function fromSettings(s: SystemSettings | undefined): FormState {
     retry_timeout_seconds: asNum(s['retry.timeout_seconds'], 300),
     tolerance_circuit_failures: asNum(s['tolerance.circuit_failures'], 3),
     tolerance_circuit_cooldown_seconds: asNum(s['tolerance.circuit_cooldown_seconds'], 300),
+    provider_routes: providerRoutesValue(s['provider.routes']),
     proxy_global_enabled: asBool(s['proxy.global_enabled']),
     proxy_selection_mode: asStr(s['proxy.selection_mode'], 'fixed') === 'random' ? 'random' : 'fixed',
     proxy_global_id: asNum(s['proxy.global_id'], 0),
@@ -105,6 +115,9 @@ function fromSettings(s: SystemSettings | undefined): FormState {
     payment_notify_url: asStr(s['payment.notify_url']),
     alipay_app_id: asStr(s['payment.alipay_app_id']),
     alipay_private_key: asStr(s['payment.alipay_private_key']),
+    alipay_public_key: asStr(s['payment.alipay_public_key']),
+    alipay_gateway_url: asStr(s['payment.alipay_gateway_url']),
+    alipay_subject_prefix: asStr(s['payment.alipay_subject_prefix'], 'DAPO达波显影-'),
     wechat_mch_id: asStr(s['payment.wechat_mch_id']),
     wechat_api_v3_key: asStr(s['payment.wechat_api_v3_key']),
   };
@@ -117,6 +130,7 @@ function toPayload(f: FormState): Partial<SystemSettings> {
     'retry.timeout_seconds': Number(f.retry_timeout_seconds) || 0,
     'tolerance.circuit_failures': Number(f.tolerance_circuit_failures) || 0,
     'tolerance.circuit_cooldown_seconds': Number(f.tolerance_circuit_cooldown_seconds) || 0,
+    'provider.routes': normalizeProviderRoutes(f.provider_routes),
     'proxy.global_enabled': f.proxy_global_enabled,
     'proxy.selection_mode': f.proxy_selection_mode,
     'proxy.global_id': Number(f.proxy_global_id) || 0,
@@ -138,6 +152,9 @@ function toPayload(f: FormState): Partial<SystemSettings> {
     'payment.notify_url': f.payment_notify_url.trim(),
     'payment.alipay_app_id': f.alipay_app_id.trim(),
     'payment.alipay_private_key': f.alipay_private_key.trim(),
+    'payment.alipay_public_key': f.alipay_public_key.trim(),
+    'payment.alipay_gateway_url': f.alipay_gateway_url.trim(),
+    'payment.alipay_subject_prefix': f.alipay_subject_prefix.trim(),
     'payment.wechat_mch_id': f.wechat_mch_id.trim(),
     'payment.wechat_api_v3_key': f.wechat_api_v3_key.trim(),
   };
@@ -214,6 +231,10 @@ export default function ConfigPage() {
             <NumberField label="请求超时（秒）" value={form.retry_timeout_seconds} min={30} onChange={(v) => set('retry_timeout_seconds', v)} />
             <NumberField label="熔断失败次数" value={form.tolerance_circuit_failures} min={1} onChange={(v) => set('tolerance_circuit_failures', v)} />
             <NumberField label="熔断冷却时间（秒）" value={form.tolerance_circuit_cooldown_seconds} min={30} onChange={(v) => set('tolerance_circuit_cooldown_seconds', v)} />
+          </Section>
+
+          <Section icon={<GitBranch size={18} />} title="模型路由" desc="配置图片、文字、视频模型进入哪个上游账号池，并控制轮询策略和认证类型。">
+            <ProviderRoutesEditor value={form.provider_routes} onChange={(v) => set('provider_routes', v)} />
           </Section>
 
           <Section icon={<Database size={18} />} title="刷新与存储" desc="控制 OAuth 刷新窗口、全局代理和生成历史保留周期。">
@@ -314,9 +335,12 @@ export default function ConfigPage() {
               <TextField label="默认支付通道" value={form.payment_provider} onChange={(v) => set('payment_provider', v)} placeholder="alipay / wechat" />
               <TextField label="支付回调地址" value={form.payment_notify_url} onChange={(v) => set('payment_notify_url', v)} />
               <TextField label="支付宝 AppID" value={form.alipay_app_id} onChange={(v) => set('alipay_app_id', v)} />
+              <TextField label="支付宝网关" value={form.alipay_gateway_url} onChange={(v) => set('alipay_gateway_url', v)} placeholder="默认官方正式网关" />
+              <TextField label="订单标题前缀" value={form.alipay_subject_prefix} onChange={(v) => set('alipay_subject_prefix', v)} />
               <TextField label="微信商户号" value={form.wechat_mch_id} onChange={(v) => set('wechat_mch_id', v)} />
             </div>
             <Field label="支付宝私钥"><textarea className="input font-mono text-small min-h-[96px]" value={form.alipay_private_key} onChange={(e) => set('alipay_private_key', e.target.value)} /></Field>
+            <Field label="支付宝公钥"><textarea className="input font-mono text-small min-h-[96px]" value={form.alipay_public_key} onChange={(e) => set('alipay_public_key', e.target.value)} /></Field>
             <TextField label="微信 API v3 Key" value={form.wechat_api_v3_key} onChange={(v) => set('wechat_api_v3_key', v)} type="password" />
           </Section>
         </div>

@@ -4,8 +4,8 @@
 @tailwind components;
 @tailwind utilities;
 
-/* User app shell overrides. Keep the public app quiet and close to the
-   reference: white canvas, thin borders, soft controls, little decoration. */
+/* User app shell overrides. DAPO is a public C-side creation surface:
+   editorial, image-led, artistic, but still restrained enough for daily use. */
 
 @layer base {
   :root {
@@ -25,8 +25,15 @@
     --focus-ring: 0 0 0 3px rgba(17, 17, 17, .08);
   }
 
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    overflow-x: hidden;
+    background: #000000;
+  }
+
   body {
-    background: #ffffff;
     line-height: 1.5;
   }
 }
@@ -127,12 +134,347 @@
     --tw-ring-offset-shadow: 0 0 #0000 !important;
   }
 
+  .dapo-studio {
+    position: relative;
+    isolation: isolate;
+    overflow-x: hidden;
+    background: #000;
+  }
+
+  .dapo-galaxy-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 50% 8%, rgba(27, 38, 64, .82), transparent 38%),
+      #000;
+  }
+
+  .galaxy-container,
+  .galaxy-canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .dapo-stage-frame {
+    min-height: clamp(260px, 55vw, 620px);
+    overflow: visible;
+  }
+
+  .dapo-ascii-stage {
+    position: relative;
+    min-height: inherit;
+    width: 100%;
+    max-width: 100%;
+    overflow: clip;
+    border-radius: 0;
+    contain: layout paint;
+    background: transparent;
+  }
+
+  .dapo-ascii-stage::after {
+    content: none;
+  }
+
+  .dapo-ascii-stage .ascii-text-container {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .dapo-ascii-stage .ascii-text-container pre {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 2;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    text-align: left;
+    max-width: 100%;
+    overflow: hidden;
+    color: #ffffff;
+    background-image: linear-gradient(90deg, #ffffff 0%, #c084fc 30%, #f472b6 58%, #38bdf8 100%);
+    background-attachment: scroll;
+    background-size: 140% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter:
+      drop-shadow(0 0 8px rgba(192, 132, 252, .55))
+      drop-shadow(0 0 22px rgba(56, 189, 248, .35));
+    mix-blend-mode: normal;
+    opacity: .96;
+  }
+
+  .border-glow {
+    position: relative;
+    isolation: isolate;
+    width: 100%;
+    border-radius: var(--border-glow-radius);
+  }
+
+  .border-glow::before,
+  .border-glow::after {
+    content: '';
+    position: absolute;
+    pointer-events: none;
+  }
+
+  .border-glow::before {
+    inset: 0;
+    z-index: 2;
+    border-radius: inherit;
+    padding: 1px;
+    background:
+      var(--border-glow-ring),
+      linear-gradient(135deg, rgba(255, 255, 255, .18), rgba(255, 255, 255, .04));
+    opacity: calc(.34 + var(--border-glow-opacity) * .66);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+
+  .border-glow::after {
+    left: 0;
+    top: 0;
+    z-index: 0;
+    width: calc(var(--border-glow-size) * 2);
+    height: calc(var(--border-glow-size) * 2);
+    border-radius: 999px;
+    background: radial-gradient(circle, rgb(var(--border-glow-rgb) / .78) 0%, transparent 68%);
+    filter: blur(14px);
+    opacity: var(--border-glow-opacity);
+    transform: translate(
+      calc(var(--border-glow-x) - var(--border-glow-size)),
+      calc(var(--border-glow-y) - var(--border-glow-size))
+    );
+    transition: opacity 160ms ease;
+  }
+
+  .border-glow--animated::before {
+    animation: border-glow-rotate 6s linear infinite;
+  }
+
+  .border-glow__content {
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+    border-radius: inherit;
+    background: var(--border-glow-bg);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, .08),
+      0 18px 70px rgba(0, 0, 0, .38);
+  }
+
+  .shiny-text {
+    display: inline-block;
+    min-width: 0;
+    color: var(--shiny-text-color);
+    background-image: linear-gradient(
+      110deg,
+      var(--shiny-text-color) 0%,
+      var(--shiny-text-color) 36%,
+      var(--shiny-text-shine) 48%,
+      #ffffff 52%,
+      var(--shiny-text-shine) 56%,
+      var(--shiny-text-color) 68%,
+      var(--shiny-text-color) 100%
+    );
+    background-position: var(--shiny-text-from) 50%;
+    background-size: var(--shiny-text-spread) 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 8px rgba(210, 255, 182, .18));
+    line-height: 1.25;
+    white-space: nowrap;
+    animation: shiny-text-sweep var(--shiny-text-speed) linear var(--shiny-text-delay) infinite;
+  }
+
+  .shiny-text--yoyo {
+    animation-direction: alternate;
+  }
+
+  .shiny-text--pause-on-hover:hover {
+    animation-play-state: paused;
+  }
+
+  .shiny-text--disabled {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    filter: none;
+  }
+
+  .dapo-composer-card {
+    min-width: 0;
+  }
+
+  .dapo-result-shell {
+    display: grid;
+    width: 100%;
+    gap: 12px;
+  }
+
+  .dapo-result-meta {
+    margin-top: 0;
+  }
+
+  .dapo-result-meta .dapo-param-strip__item {
+    border-color: rgba(255, 255, 255, .14);
+    background: rgba(255, 255, 255, .88);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, .18);
+  }
+
+  .dapo-param-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 6px;
+    max-width: 100%;
+  }
+
+  .dapo-param-strip__item {
+    min-width: 0;
+    border: 1px solid rgba(16, 19, 24, .10);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, .72);
+    backdrop-filter: blur(12px);
+  }
+
+  .dapo-param-strip__item span {
+    display: block;
+    color: #667085;
+    font-size: 12px;
+  }
+
+  .dapo-param-strip__item strong {
+    display: block;
+    margin-top: 3px;
+    overflow: hidden;
+    color: #101318;
+    font-size: 14px;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .circular-gallery {
+    overflow: hidden;
+    perspective: 900px;
+  }
+
+  .circular-gallery__track {
+    display: grid;
+    grid-auto-columns: clamp(116px, 18vw, 178px);
+    grid-auto-flow: column;
+    gap: 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 2px 12px;
+    cursor: grab;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    touch-action: pan-x;
+  }
+
+  .circular-gallery__track:active {
+    cursor: grabbing;
+  }
+
+  .circular-gallery__track::-webkit-scrollbar {
+    display: none;
+  }
+
+  .circular-gallery__card {
+    position: relative;
+    aspect-ratio: 4 / 5;
+    overflow: hidden;
+    border: 1px solid rgba(16, 19, 24, .08);
+    border-radius: 8px;
+    background: #e9edf2;
+    scroll-snap-align: center;
+    transform-origin: center;
+    transition: transform 260ms cubic-bezier(.22, 1, .36, 1), opacity 260ms ease, box-shadow 260ms ease;
+    box-shadow: 0 10px 26px rgba(16, 24, 40, .10);
+  }
+
+  .circular-gallery__card img {
+    position: absolute;
+    inset: 0;
+    height: 100%;
+    width: 100%;
+    object-fit: cover;
+    transition: transform 520ms cubic-bezier(.22, 1, .36, 1);
+    pointer-events: none;
+  }
+
+  .circular-gallery__card:hover {
+    box-shadow: 0 18px 40px rgba(16, 24, 40, .16);
+  }
+
+  .circular-gallery__card:hover img {
+    transform: scale(1.05);
+  }
+
+  .circular-gallery__shade {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, transparent 25%, rgba(0, 0, 0, .72) 100%);
+    pointer-events: none;
+  }
+
+  .circular-gallery__label {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1;
+    padding: 10px;
+    color: #fff;
+    text-align: left;
+  }
+
+  .circular-gallery__label span {
+    display: block;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .circular-gallery__label small {
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    color: rgba(255, 255, 255, .72);
+    font-size: 11px;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .generating-dots {
     position: absolute;
     inset: 0;
     overflow: hidden;
     border-radius: inherit;
-    background: #fafafa;
+    background:
+      linear-gradient(135deg, rgba(255, 248, 229, .96), rgba(232, 249, 246, .92)),
+      #fafafa;
   }
 
   .generating-dots::before,
@@ -140,7 +482,7 @@
     content: '';
     position: absolute;
     inset: 7%;
-    background-image: radial-gradient(circle, rgba(17, 17, 17, .34) 1.45px, transparent 1.75px);
+    background-image: radial-gradient(circle, rgba(16, 19, 24, .34) 1.45px, transparent 1.75px);
     background-size: 24px 24px;
     background-position: center;
     mask-image: radial-gradient(circle at 58% 48%, #000 0 34%, rgba(0, 0, 0, .68) 48%, transparent 72%);
@@ -224,6 +566,21 @@
   }
 }
 
+@keyframes border-glow-rotate {
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+
+@keyframes shiny-text-sweep {
+  from {
+    background-position: var(--shiny-text-from) 50%;
+  }
+  to {
+    background-position: var(--shiny-text-to) 50%;
+  }
+}
+
 /* Final user-app typography pass: this front end should feel light and quiet.
    Override Tailwind font weight utilities that individual pages still use. */
 #root :where(
@@ -258,4 +615,40 @@
   .font-medium
 ) {
   font-weight: 400 !important;
+}
+
+.dapo-studio {
+  font-feature-settings: "kern" 1, "liga" 1;
+}
+
+.dapo-studio .dapo-title {
+  font-weight: 560 !important;
+  letter-spacing: 0;
+}
+
+.dapo-studio .dapo-section-title,
+.dapo-studio .dapo-strong {
+  font-weight: 540 !important;
+  letter-spacing: 0;
+}
+
+.dapo-studio textarea::placeholder {
+  line-height: 1.9;
+}
+
+@media (max-width: 720px) {
+  .dapo-param-strip {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+
+  .dapo-param-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .dapo-param-strip__item {
+    min-width: 136px;
+  }
 }
