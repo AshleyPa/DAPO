@@ -7,6 +7,9 @@ on:
         description: Image tag to publish
         required: true
         default: dapo-v2-latest
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -15,6 +18,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/ashleypa/dapo
+  IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag || github.sha }}
 
 jobs:
   build:
@@ -70,5 +74,5 @@ jobs:
             VERSION=${{ github.sha }}
             BUILD_TIME=${{ github.run_id }}
           tags: |
-            ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ inputs.image_tag }}
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ env.IMAGE_TAG }}
             ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ github.sha }}
