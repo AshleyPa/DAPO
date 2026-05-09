@@ -11,18 +11,20 @@ import (
 
 	"github.com/kleinai/backend/internal/middleware"
 	"github.com/kleinai/backend/internal/service"
+	"github.com/kleinai/backend/pkg/config"
 	"github.com/kleinai/backend/pkg/errcode"
 	"github.com/kleinai/backend/pkg/response"
 )
 
 // AdminSystemHandler /admin/api/v1/system 资源 handler。
 type AdminSystemHandler struct {
-	svc *service.SystemConfigService
+	svc       *service.SystemConfigService
+	readiness *service.SystemReadinessService
 }
 
 // NewAdminSystemHandler 构造。
-func NewAdminSystemHandler(svc *service.SystemConfigService) *AdminSystemHandler {
-	return &AdminSystemHandler{svc: svc}
+func NewAdminSystemHandler(svc *service.SystemConfigService, cfg *config.Config) *AdminSystemHandler {
+	return &AdminSystemHandler{svc: svc, readiness: service.NewSystemReadinessService(cfg, svc)}
 }
 
 // GetSettings GET /admin/api/v1/system/settings
@@ -55,6 +57,16 @@ func (h *AdminSystemHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 	response.OK(c, gin.H{"updated": updated})
+}
+
+// Readiness GET /admin/api/v1/system/readiness
+func (h *AdminSystemHandler) Readiness(c *gin.Context) {
+	resp, err := h.readiness.Check(c.Request.Context())
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, resp)
 }
 
 // CacheStats GET /admin/api/v1/system/cache

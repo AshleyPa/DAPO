@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Cloud, CreditCard, Database, GitBranch, RefreshCw, Save, ShieldAlert, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Cloud, CreditCard, Database, GitBranch, RefreshCw, Save, ShieldAlert, Trash2, XCircle } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { ApiError } from '../../lib/api';
 import { providerRoutesApi, proxiesApi, systemApi } from '../../lib/services';
-import type { ProviderHealthProviderItem, ProviderRouteRule, ProviderRouteTestReq, ProviderRouteTestResp, ProxyItem, SystemSettings } from '../../lib/types';
+import type { AdminSystemReadinessCheck, AdminSystemReadinessResp, ProviderHealthProviderItem, ProviderRouteRule, ProviderRouteTestReq, ProviderRouteTestResp, ProxyItem, SystemSettings } from '../../lib/types';
 import { toast } from '../../stores/toast';
 import ProviderRoutesEditor, { defaultProviderRoutes, normalizeProviderRoutes, providerRoutesValue } from './ProviderRoutesEditor';
 
@@ -169,6 +169,7 @@ function toPayload(f: FormState): Partial<SystemSettings> {
 export default function ConfigPage() {
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: ['admin', 'system', 'settings'], queryFn: () => systemApi.get() });
+  const readiness = useQuery({ queryKey: ['admin', 'system', 'readiness'], queryFn: () => systemApi.readiness() });
   const cacheStats = useQuery({ queryKey: ['admin', 'system', 'cache'], queryFn: () => systemApi.cacheStats() });
   const proxies = useQuery({
     queryKey: ['admin', 'proxies', 'options'],
@@ -245,6 +246,13 @@ export default function ConfigPage() {
       {settings.isLoading ? (
         <div className="card card-section text-center text-text-tertiary py-10">加载中...</div>
       ) : (
+        <>
+        <ReadinessPanel
+          data={readiness.data}
+          loading={readiness.isLoading}
+          fetching={readiness.isFetching}
+          onRefresh={() => readiness.refetch()}
+        />
         <div className="grid gap-4 xl:grid-cols-2">
           <Section icon={<ShieldAlert size={18} />} title="重试与容错" desc="控制生成请求失败后的重试次数、超时和账号熔断策略。">
             <NumberField label="最大重试次数" value={form.retry_max_attempts} min={0} max={10} onChange={(v) => set('retry_max_attempts', v)} />
@@ -379,9 +387,126 @@ export default function ConfigPage() {
             <TextField label="微信 API v3 Key" value={form.wechat_api_v3_key} onChange={(v) => set('wechat_api_v3_key', v)} type="password" />
           </Section>
         </div>
+        </>
       )}
     </div>
   );
+}
+
+function ReadinessPanel({
+  data,
+  loading,
+  fetching,
+  onRefresh,
+}: {
+  data?: AdminSystemReadinessResp;
+  loading: boolean;
+  fetching: boolean;
+  onRefresh: () => void;
+}) {
+  const groups = groupReadinessChecks(data?.checks ?? []);
+  const overall = data?.overall ?? 'warn';
+  const title = overall === 'error' ? '存在阻断项' : overall === 'warn' ? '存在待确认项' : '配置体检通过';
+  return (
+    <section className="card card-section space-y-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <span className={`grid h-9 w-9 place-items-center rounded-md ${overall === 'error' ? 'bg-danger/10 text-danger' : overall === 'warn' ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'}`}>
+            {overall === 'error' ? <XCircle size={18} /> : overall === 'warn' ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
+          </span>
+          <div>
+            <h2 className="text-h5 font-semibold text-text-primary">上线配置体检 · {title}</h2>
+            <p className="text-small text-text-tertiary mt-0.5">
+              只读检查 SMTP、支付宝、Provider 路由和存储配置，不会发送邮件、不会请求支付网关、不会暴露密钥。
+              {data?.refreshed_at ? ` 刷新于 ${formatUnix(data.refreshed_at)}` : ''}
+            </p>
+          </div>
+        </div>
+        <button type="button" className="btn btn-outline btn-sm" disabled={fetching} onClick={onRefresh}>
+          <RefreshCw size={14} className={fetching ? 'animate-spin' : ''} /> 刷新体检
+        </button>
+      </header>
+      {loading ? (
+        <div className="rounded-md border border-border bg-surface-2 p-4 text-center text-small text-text-tertiary">体检中...</div>
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <ReadinessCount label="通过" value={data?.summary.ok ?? 0} tone="ok" />
+            <ReadinessCount label="提醒" value={data?.summary.warn ?? 0} tone="warn" />
+            <ReadinessCount label="阻断" value={data?.summary.error ?? 0} tone="error" />
+          </div>
+          <div className="grid gap-3 xl:grid-cols-2">
+            {Object.entries(groups).map(([category, checks]) => (
+              <div key={category} className="rounded-md border border-border bg-surface-2 p-3">
+                <div className="mb-2 text-small font-semibold text-text-primary">{readinessCategoryLabel(category)}</div>
+                <div className="grid gap-2">
+                  {checks.map((check) => (
+                    <ReadinessRow key={`${check.category}-${check.key}`} check={check} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function ReadinessCount({ label, value, tone }: { label: string; value: number; tone: 'ok' | 'warn' | 'error' }) {
+  const cls = tone === 'error' ? 'text-danger bg-danger/10 border-danger/20' : tone === 'warn' ? 'text-warning bg-warning/10 border-warning/20' : 'text-success bg-success/10 border-success/20';
+  return (
+    <div className={`rounded-md border p-3 ${cls}`}>
+      <div className="text-small opacity-80">{label}</div>
+      <div className="mt-1 text-h4 font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function ReadinessRow({ check }: { check: AdminSystemReadinessCheck }) {
+  const icon = check.status === 'error' ? <XCircle size={15} /> : check.status === 'warn' ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />;
+  const tone = check.status === 'error' ? 'text-danger' : check.status === 'warn' ? 'text-warning' : 'text-success';
+  return (
+    <div className="rounded-md border border-border bg-surface p-2">
+      <div className="flex items-start gap-2">
+        <span className={`mt-0.5 ${tone}`}>{icon}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-small font-semibold text-text-primary">{check.label}</span>
+            {check.required && <span className="badge badge-outline">必需</span>}
+            {check.source && <span className="text-tiny text-text-tertiary">来源 {check.source}</span>}
+          </div>
+          <p className="mt-1 break-words text-small text-text-tertiary">{check.message}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function groupReadinessChecks(checks: AdminSystemReadinessCheck[]) {
+  return checks.reduce<Record<string, AdminSystemReadinessCheck[]>>((acc, check) => {
+    const next = acc[check.category] ?? [];
+    next.push(check);
+    acc[check.category] = next;
+    return acc;
+  }, {});
+}
+
+function readinessCategoryLabel(category: string) {
+  switch (category) {
+    case 'runtime':
+      return '基础运行';
+    case 'smtp':
+      return '邮箱验证码';
+    case 'payment':
+      return '支付宝支付';
+    case 'provider_routes':
+      return 'Provider 路由';
+    case 'storage':
+      return '存储';
+    default:
+      return category;
+  }
 }
 
 function Section({ icon, title, desc, children }: { icon: ReactNode; title: string; desc: string; children: ReactNode }) {

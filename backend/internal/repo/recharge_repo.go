@@ -65,3 +65,10 @@ func (r *RechargeRepo) ListUserOrders(ctx context.Context, userID uint64, page, 
 func (r *RechargeRepo) Update(ctx context.Context, id uint64, fields map[string]any) error {
 	return r.db.WithContext(ctx).Model(&model.RechargeRecord{}).Where("id = ?", id).Updates(fields).Error
 }
+
+func (r *RechargeRepo) UpdateIfStatus(ctx context.Context, id uint64, status int8, fields map[string]any) (int64, error) {
+	res := r.db.WithContext(ctx).Model(&model.RechargeRecord{}).
+		Where("id = ? AND status = ?", id, status).
+		Updates(fields)
+	return res.RowsAffected, res.Error
+}

@@ -35,6 +35,8 @@ const (
 	SettingAlipayPublicKey     = "payment.alipay_public_key"
 	SettingAlipayGatewayURL    = "payment.alipay_gateway_url"
 	SettingAlipaySubjectPrefix = "payment.alipay_subject_prefix"
+
+	rechargeOrderTTL = 30 * time.Minute
 )
 
 type RechargeService struct {
@@ -78,6 +80,10 @@ func (s *RechargeService) CreateOrder(ctx context.Context, userID uint64, req *d
 	idemKey = normalizeIdemKey(idemKey)
 	if idemKey != "" {
 		if existing, err := s.repo.GetByIdem(ctx, userID, idemKey); err == nil && existing != nil {
+			existing, err = s.expirePendingOrder(ctx, existing)
+			if err != nil {
+				return nil, err
+			}
 			return orderResp(existing), nil
 		} else if err != nil && err != repo.ErrNotFound {
 			return nil, errcode.DBError.Wrap(err)
@@ -184,6 +190,10 @@ func (s *RechargeService) GetUserOrder(ctx context.Context, userID uint64, order
 		}
 		return nil, errcode.DBError.Wrap(err)
 	}
+	row, err = s.expirePendingOrder(ctx, row)
+	if err != nil {
+		return nil, err
+	}
 	return orderResp(row), nil
 }
 
@@ -194,6 +204,11 @@ func (s *RechargeService) ListUserOrders(ctx context.Context, userID uint64, pag
 	}
 	out := make([]*dto.RechargeOrderResp, 0, len(rows))
 	for _, row := range rows {
+		if refreshed, err := s.expirePendingOrder(ctx, row); err == nil {
+			row = refreshed
+		} else {
+			return nil, 0, err
+		}
 		out = append(out, orderResp(row))
 	}
 	return out, total, nil
@@ -380,6 +395,39 @@ func orderResp(row *model.RechargeRecord) *dto.RechargeOrderResp {
 		PaidAt:      paidAt,
 		CreatedAt:   row.CreatedAt.Unix(),
 	}
+}
+
+func (s *RechargeService) expirePendingOrder(ctx context.Context, row *model.RechargeRecord) (*model.RechargeRecord, error) {
+	if !isExpiredPendingRecharge(row, time.Now()) {
+		return row, nil
+	}
+	now := time.Now().UTC()
+	extra := mergeExtra(row.Extra, map[string]any{"expired_at": now.Format(time.RFC3339)})
+	affected, err := s.repo.UpdateIfStatus(ctx, row.ID, model.RechargeStatusPending, map[string]any{
+		"status": model.RechargeStatusExpired,
+		"extra":  extra,
+	})
+	if err != nil {
+		return nil, errcode.DBError.Wrap(err)
+	}
+	if affected == 0 {
+		refreshed, err := s.repo.GetByOrderNo(ctx, row.OrderNo)
+		if err != nil {
+			return nil, errcode.DBError.Wrap(err)
+		}
+		return refreshed, nil
+	}
+	row.Status = model.RechargeStatusExpired
+	row.Extra = &extra
+	row.UpdatedAt = now
+	return row, nil
+}
+
+func isExpiredPendingRecharge(row *model.RechargeRecord, now time.Time) bool {
+	return row != nil &&
+		row.Status == model.RechargeStatusPending &&
+		!row.CreatedAt.IsZero() &&
+		!row.CreatedAt.Add(rechargeOrderTTL).After(now)
 }
 
 func defaultRechargePackages() []rechargePackage {

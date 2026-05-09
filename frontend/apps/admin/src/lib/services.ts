@@ -17,6 +17,7 @@ import type {
   AdminPromptGalleryBody,
   AdminPromptGalleryItem,
   AdminPromptGalleryReorderBody,
+  AdminSystemReadinessResp,
   AdminUserAdjustPointsBody,
   AdminUserAdjustPointsResp,
   AdminUserCreateBody,
@@ -281,6 +282,7 @@ export const proxiesApi = {
 
 export const systemApi = {
   get: () => request<SystemSettings>({ url: '/system/settings', method: 'GET' }),
+  readiness: () => request<AdminSystemReadinessResp>({ url: '/system/readiness', method: 'GET' }),
   update: (kv: Partial<SystemSettings>) =>
     request<{ updated: number }>({
       url: '/system/settings',

@@ -71,7 +71,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	billingH := handler.NewAdminBillingHandler(walletRepo)
 	promoH := handler.NewAdminPromoHandler(promoSvc)
 	proxyH := handler.NewAdminProxyHandler(proxySvc, accountTest)
-	sysH := handler.NewAdminSystemHandler(sysCfgSvc)
+	sysH := handler.NewAdminSystemHandler(sysCfgSvc, deps.Cfg)
 	providerRouteH := handler.NewAdminProviderRouteHandler(providerRouteTestSvc)
 	logH := handler.NewAdminLogHandler(generationRepo, accountRepo, deps.AES)
 	dashboardH := handler.NewAdminDashboardHandler(dashboardRepo)
@@ -141,6 +141,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 		{
 			sys.GET("/settings", sysH.GetSettings)
 			sys.PUT("/settings", sysH.UpdateSettings)
+			sys.GET("/readiness", sysH.Readiness)
 			sys.GET("/cache", sysH.CacheStats)
 			sys.DELETE("/cache", sysH.CleanCache)
 		}

@@ -181,38 +181,42 @@ func (c *Client) Precreate(ctx context.Context, in PrecreateInput) (*PrecreateRe
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("alipay: http status %d: %s", resp.StatusCode, string(raw))
 	}
-	var envelope struct {
-		Response struct {
-			Code       string `json:"code"`
-			Msg        string `json:"msg"`
-			SubCode    string `json:"sub_code"`
-			SubMsg     string `json:"sub_msg"`
-			OutTradeNo string `json:"out_trade_no"`
-			TradeNo    string `json:"trade_no"`
-			QRCode     string `json:"qr_code"`
-		} `json:"alipay_trade_precreate_response"`
-		Sign string `json:"sign"`
+	respRaw, respSign, err := signedResponse(raw, "alipay_trade_precreate_response")
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
+	if !c.verifyContent(string(respRaw), respSign) {
+		return nil, ErrInvalidSign
+	}
+	var response struct {
+		Code       string `json:"code"`
+		Msg        string `json:"msg"`
+		SubCode    string `json:"sub_code"`
+		SubMsg     string `json:"sub_msg"`
+		OutTradeNo string `json:"out_trade_no"`
+		TradeNo    string `json:"trade_no"`
+		QRCode     string `json:"qr_code"`
+	}
+	if err := json.Unmarshal(respRaw, &response); err != nil {
 		return nil, fmt.Errorf("alipay: decode response: %w", err)
 	}
-	if envelope.Response.Code != "10000" {
-		msg := envelope.Response.SubMsg
+	if response.Code != "10000" {
+		msg := response.SubMsg
 		if msg == "" {
-			msg = envelope.Response.Msg
+			msg = response.Msg
 		}
-		if envelope.Response.SubCode != "" {
-			msg = envelope.Response.SubCode + ": " + msg
+		if response.SubCode != "" {
+			msg = response.SubCode + ": " + msg
 		}
 		return nil, fmt.Errorf("alipay: precreate failed: %s", msg)
 	}
-	if envelope.Response.QRCode == "" {
+	if response.QRCode == "" {
 		return nil, errors.New("alipay: empty qr_code")
 	}
 	return &PrecreateResult{
-		OutTradeNo: envelope.Response.OutTradeNo,
-		TradeNo:    envelope.Response.TradeNo,
-		QRCode:     envelope.Response.QRCode,
+		OutTradeNo: response.OutTradeNo,
+		TradeNo:    response.TradeNo,
+		QRCode:     response.QRCode,
 	}, nil
 }
 
@@ -256,12 +260,19 @@ func (c *Client) Verify(params map[string]string) bool {
 	if sign == "" {
 		return false
 	}
-	canonical := canonicalString(params, false)
+	canonical := canonicalString(params)
+	return c.verifyContent(canonical, sign)
+}
+
+func (c *Client) verifyContent(content, sign string) bool {
+	if c == nil || c.publicKey == nil || strings.TrimSpace(sign) == "" {
+		return false
+	}
 	sig, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(sign, " ", "+"))
 	if err != nil {
 		return false
 	}
-	sum := sha256.Sum256([]byte(canonical))
+	sum := sha256.Sum256([]byte(content))
 	return rsa.VerifyPKCS1v15(c.publicKey, crypto.SHA256, sum[:], sig) == nil
 }
 
@@ -269,7 +280,7 @@ func (c *Client) sign(params map[string]string) (string, error) {
 	if c.privateKey == nil {
 		return "", ErrDisabled
 	}
-	sum := sha256.Sum256([]byte(canonicalString(params, true)))
+	sum := sha256.Sum256([]byte(canonicalString(params)))
 	sig, err := rsa.SignPKCS1v15(rand.Reader, c.privateKey, crypto.SHA256, sum[:])
 	if err != nil {
 		return "", err
@@ -277,10 +288,10 @@ func (c *Client) sign(params map[string]string) (string, error) {
 	return base64.StdEncoding.EncodeToString(sig), nil
 }
 
-func canonicalString(params map[string]string, includeSignType bool) string {
+func canonicalString(params map[string]string) string {
 	keys := make([]string, 0, len(params))
 	for k, v := range params {
-		if k == "sign" || (!includeSignType && k == "sign_type") {
+		if k == "sign" || k == "sign_type" {
 			continue
 		}
 		if v == "" {
@@ -299,6 +310,25 @@ func canonicalString(params map[string]string, includeSignType bool) string {
 		b.WriteString(params[k])
 	}
 	return b.String()
+}
+
+func signedResponse(raw []byte, responseKey string) (json.RawMessage, string, error) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, "", fmt.Errorf("alipay: decode response: %w", err)
+	}
+	respRaw := envelope[responseKey]
+	if len(respRaw) == 0 || string(respRaw) == "null" {
+		return nil, "", fmt.Errorf("alipay: missing response node %s", responseKey)
+	}
+	var sign string
+	if rawSign := envelope["sign"]; len(rawSign) > 0 {
+		_ = json.Unmarshal(rawSign, &sign)
+	}
+	if strings.TrimSpace(sign) == "" {
+		return nil, "", errors.New("alipay: empty response sign")
+	}
+	return respRaw, sign, nil
 }
 
 func amountYuan(fen int64) string {

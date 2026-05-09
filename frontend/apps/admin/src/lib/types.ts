@@ -39,6 +39,29 @@ export interface AdminMe {
   role_name: string;
 }
 
+export type AdminSystemReadinessStatus = 'ok' | 'warn' | 'error' | string;
+
+export interface AdminSystemReadinessCheck {
+  category: string;
+  key: string;
+  label: string;
+  status: AdminSystemReadinessStatus;
+  message: string;
+  source?: string;
+  required: boolean;
+}
+
+export interface AdminSystemReadinessResp {
+  refreshed_at: number;
+  overall: AdminSystemReadinessStatus;
+  summary: {
+    ok: number;
+    warn: number;
+    error: number;
+  };
+  checks: AdminSystemReadinessCheck[];
+}
+
 /** 账号池条目 */
 export interface AdminUserItem {
   id: number;
