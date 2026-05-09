@@ -36,6 +36,10 @@ jobs:
             context: frontend
             file: frontend/apps/admin/Dockerfile
             image: dapo-admin-web
+          - name: gateway
+            context: frontend
+            file: frontend/apps/gateway/Dockerfile
+            image: dapo-gateway
 
     steps:
       - name: Checkout
