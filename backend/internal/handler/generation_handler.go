@@ -62,7 +62,7 @@ func (h *GenerationHandler) Models(c *gin.Context) {
 // CachedAsset GET /api/v1/gen/cached/*path
 func (h *GenerationHandler) CachedAsset(c *gin.Context) {
 	p := strings.TrimLeft(c.Param("path"), "/")
-	if p == "" || strings.Contains(p, "..") || strings.HasPrefix(p, "/") {
+	if !isPublicCachedAssetPath(p) {
 		response.Fail(c, errcode.InvalidParam.WithMsg("invalid asset path"))
 		return
 	}
@@ -72,6 +72,13 @@ func (h *GenerationHandler) CachedAsset(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "public, max-age=86400")
 	c.File(filepath.Join(root, filepath.FromSlash(p)))
+}
+
+func isPublicCachedAssetPath(p string) bool {
+	if p == "" || strings.Contains(p, "..") || strings.HasPrefix(p, "/") {
+		return false
+	}
+	return strings.HasPrefix(p, "generated/") || strings.HasPrefix(p, "prompt-gallery/")
 }
 
 // CreateImage POST /api/v1/gen/image

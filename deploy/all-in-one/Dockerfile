@@ -53,7 +53,13 @@ FROM nginx:1.27-alpine AS runtime
 
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata
+ARG MIHOMO_VERSION=v1.19.10
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    wget -q -O /tmp/mihomo.gz "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-amd64-compatible-${MIHOMO_VERSION}.gz" && \
+    gunzip -c /tmp/mihomo.gz > /usr/local/bin/mihomo && \
+    chmod +x /usr/local/bin/mihomo && \
+    rm -f /tmp/mihomo.gz
 
 COPY --from=backend-build /out/api /app/api
 COPY --from=backend-build /out/admin /app/admin
@@ -78,6 +84,8 @@ ENV KLEIN_ADMIN_PORT=17188
 ENV KLEIN_OPENAI_PORT=17200
 ENV KLEIN_LOG_DIR=/app/logs
 ENV KLEIN_STORAGE_ROOT=/app/storage
+ENV KLEIN_MIHOMO_HOME=/app/private/mihomo
+ENV KLEIN_MIHOMO_CONTROLLER=http://127.0.0.1:9090
 ENV DAPO_GATEWAY_PORT=3040
 ENV API_UPSTREAM=http://127.0.0.1:17180
 ENV ADMIN_UPSTREAM=http://127.0.0.1:17188

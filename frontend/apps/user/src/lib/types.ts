@@ -217,6 +217,10 @@ export interface RechargeOrder {
   order_no: string;
   channel: string;
   amount: number;
+  original_amount?: number;
+  discount_amount?: number;
+  promo_code?: string;
+  promo_gift_points?: number;
   points: number;
   bonus_points: number;
   total_points: number;

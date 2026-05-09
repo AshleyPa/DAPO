@@ -289,7 +289,7 @@ export default function ConfigPage() {
           fetching={readiness.isFetching}
           onRefresh={() => readiness.refetch()}
         />
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-4 2xl:grid-cols-2">
           <Section icon={<Mail size={18} />} title="邮箱验证码" desc="配置注册和找回密码验证码的 SMTP 发信参数。">
             <div className="grid gap-3 md:grid-cols-2">
               <TextField label="SMTP Host" value={form.smtp_host} onChange={(v) => set('smtp_host', v)} placeholder="smtp.qiye.aliyun.com" />
@@ -313,7 +313,7 @@ export default function ConfigPage() {
             <NumberField label="熔断冷却时间（秒）" value={form.tolerance_circuit_cooldown_seconds} min={30} onChange={(v) => set('tolerance_circuit_cooldown_seconds', v)} />
           </Section>
 
-          <Section icon={<GitBranch size={18} />} title="模型路由" desc="配置图片、文字、视频模型进入哪个上游账号池，并控制轮询策略和认证类型。">
+          <Section className="2xl:col-span-2" icon={<GitBranch size={18} />} title="模型路由" desc="配置图片、文字、视频模型进入哪个上游账号池，并控制轮询策略和认证类型。">
             <ProviderRoutesEditor value={form.provider_routes} onChange={(v) => set('provider_routes', v)} />
             <ProviderRouteDryRunPanel
               value={routeTest}
@@ -561,9 +561,9 @@ function readinessCategoryLabel(category: string) {
   }
 }
 
-function Section({ icon, title, desc, children }: { icon: ReactNode; title: string; desc: string; children: ReactNode }) {
+function Section({ icon, title, desc, children, className = '' }: { icon: ReactNode; title: string; desc: string; children: ReactNode; className?: string }) {
   return (
-    <section className="card card-section space-y-4">
+    <section className={`card card-section min-w-0 space-y-4 ${className}`}>
       <header className="flex items-start gap-3">
         <span className="grid place-items-center w-9 h-9 rounded-md bg-info-soft text-klein-500">{icon}</span>
         <div>

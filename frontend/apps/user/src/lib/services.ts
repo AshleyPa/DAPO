@@ -66,7 +66,7 @@ export const billingApi = {
     if (Array.isArray(r)) return r;
     return r?.list ?? [];
   },
-  createRechargeOrder: (body: { package_id: string; channel?: 'alipay' }, idemKey = clientIdemKey()) =>
+  createRechargeOrder: (body: { package_id: string; channel?: 'alipay'; promo_code?: string }, idemKey = clientIdemKey()) =>
     request<RechargeOrder>({
       method: 'POST',
       url: '/billing/recharge/orders',

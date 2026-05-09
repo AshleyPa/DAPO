@@ -128,11 +128,31 @@ func (s *RechargeService) CreateOrder(ctx context.Context, userID uint64, req *d
 	if amount <= 0 || pkg.Points+pkg.BonusPoints <= 0 {
 		return nil, errcode.InvalidParam.WithMsg("充值套餐配置无效")
 	}
+	promo, err := s.preparePromo(ctx, userID, req.PromoCode, pkg.ID, amount)
+	if err != nil {
+		return nil, err
+	}
+	payAmount := amount
+	bonusPoints := pkg.BonusPoints
+	if promo != nil {
+		payAmount = amount - promo.DiscountAmount
+		bonusPoints += promo.GiftPoints
+		if payAmount <= 0 {
+			return nil, errcode.InvalidParam.WithMsg("优惠后支付金额必须大于 0")
+		}
+	}
 	extra := map[string]any{
 		"package_id":   pkg.ID,
 		"package_name": pkg.Name,
 		"badge":        pkg.Badge,
 		"remark":       pkg.Remark,
+	}
+	if promo != nil {
+		extra["promo_id"] = promo.ID
+		extra["promo_code"] = promo.Code
+		extra["promo_discount"] = promo.DiscountAmount
+		extra["promo_gift_points"] = promo.GiftPoints
+		extra["original_amount"] = amount
 	}
 	extraRaw := mustJSON(extra)
 	clientIP := strings.TrimSpace(ip)
@@ -140,9 +160,9 @@ func (s *RechargeService) CreateOrder(ctx context.Context, userID uint64, req *d
 		OrderNo:     orderNo,
 		UserID:      userID,
 		Channel:     model.RechargeChannelAlipay,
-		Amount:      amount,
+		Amount:      payAmount,
 		Points:      pkg.Points,
-		BonusPoints: pkg.BonusPoints,
+		BonusPoints: bonusPoints,
 		Status:      model.RechargeStatusPending,
 		ClientIP:    &clientIP,
 		IdemKey:     &idemKey,
@@ -161,7 +181,7 @@ func (s *RechargeService) CreateOrder(ctx context.Context, userID uint64, req *d
 	pre, err := client.Precreate(ctx, alipay.PrecreateInput{
 		OutTradeNo: orderNo,
 		Subject:    pkg.Name,
-		AmountFen:  amount,
+		AmountFen:  payAmount,
 		Timeout:    30 * time.Minute,
 	})
 	if err != nil {
@@ -171,6 +191,15 @@ func (s *RechargeService) CreateOrder(ctx context.Context, userID uint64, req *d
 			"extra":  failExtra,
 		})
 		return nil, errcode.Internal.WithMsg("支付宝下单失败")
+	}
+	if promo != nil {
+		if err := s.reservePromo(ctx, userID, row.OrderNo, promo); err != nil {
+			_ = s.repo.Update(ctx, row.ID, map[string]any{
+				"status": model.RechargeStatusFailed,
+				"extra":  mergeExtra(row.Extra, map[string]any{"promo_error": err.Error()}),
+			})
+			return nil, err
+		}
 	}
 	extraRaw = mergeExtra(row.Extra, map[string]any{
 		"qr_code":         pre.QRCode,
@@ -265,6 +294,7 @@ func (s *RechargeService) CancelUserOrder(ctx context.Context, userID uint64, or
 		}
 		return orderResp(refreshed), nil
 	}
+	_ = s.releasePromoReservation(ctx, row)
 	row.Status = model.RechargeStatusCanceled
 	row.Extra = &merged
 	row.UpdatedAt = time.Now().UTC()
@@ -449,6 +479,132 @@ func (s *RechargeService) settleAlipay(ctx context.Context, pl *alipay.NotifyPay
 	})
 }
 
+type promoApplyResult struct {
+	ID             uint64
+	Code           string
+	DiscountAmount int64
+	GiftPoints     int64
+}
+
+func (s *RechargeService) preparePromo(ctx context.Context, userID uint64, code, packageID string, amount int64) (*promoApplyResult, error) {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if code == "" {
+		return nil, nil
+	}
+	var promo model.PromoCode
+	if err := s.db.WithContext(ctx).Where("code = ?", code).First(&promo).Error; err != nil {
+		return nil, errcode.InvalidParam.WithMsg("优惠码无效")
+	}
+	now := time.Now().UTC()
+	if !promo.Active(now) {
+		return nil, errcode.InvalidParam.WithMsg("优惠码不可用或已过期")
+	}
+	if promo.MinAmount > 0 && amount < promo.MinAmount {
+		return nil, errcode.InvalidParam.WithMsg("未达到优惠码最低金额")
+	}
+	if promo.ApplyTo != "" && promo.ApplyTo != "all" && promo.ApplyTo != packageID {
+		return nil, errcode.InvalidParam.WithMsg("优惠码不适用于当前套餐")
+	}
+	if promo.TotalQty > 0 && promo.UsedQty >= promo.TotalQty {
+		return nil, errcode.InvalidParam.WithMsg("优惠码已领完")
+	}
+	if promo.PerUserLimit > 0 {
+		var used int64
+		if err := s.db.WithContext(ctx).Model(&model.PromoCodeUse{}).
+			Where("promo_id = ? AND user_id = ?", promo.ID, userID).
+			Count(&used).Error; err != nil {
+			return nil, errcode.DBError.Wrap(err)
+		}
+		if int(used) >= promo.PerUserLimit {
+			return nil, errcode.InvalidParam.WithMsg("已达到优惠码使用上限")
+		}
+	}
+	out := &promoApplyResult{ID: promo.ID, Code: promo.Code}
+	switch promo.DiscountType {
+	case model.PromoTypeAmount:
+		out.DiscountAmount = promo.DiscountVal
+	case model.PromoTypeDiscount:
+		if promo.DiscountVal <= 0 || promo.DiscountVal >= 100 {
+			return nil, errcode.InvalidParam.WithMsg("折扣优惠码配置无效")
+		}
+		out.DiscountAmount = amount * (100 - promo.DiscountVal) / 100
+	case model.PromoTypeGift:
+		out.GiftPoints = promo.DiscountVal
+	default:
+		return nil, errcode.InvalidParam.WithMsg("优惠码类型不支持")
+	}
+	if out.DiscountAmount < 0 {
+		out.DiscountAmount = 0
+	}
+	if out.DiscountAmount >= amount {
+		out.DiscountAmount = amount - 1
+	}
+	return out, nil
+}
+
+func (s *RechargeService) reservePromo(ctx context.Context, userID uint64, orderNo string, promo *promoApplyResult) error {
+	if promo == nil {
+		return nil
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row model.PromoCode
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", promo.ID).First(&row).Error; err != nil {
+			return errcode.InvalidParam.WithMsg("优惠码无效")
+		}
+		if row.TotalQty > 0 && row.UsedQty >= row.TotalQty {
+			return errcode.InvalidParam.WithMsg("优惠码已领完")
+		}
+		if row.PerUserLimit > 0 {
+			var used int64
+			if err := tx.Model(&model.PromoCodeUse{}).
+				Where("promo_id = ? AND user_id = ?", promo.ID, userID).
+				Count(&used).Error; err != nil {
+				return errcode.DBError.Wrap(err)
+			}
+			if int(used) >= row.PerUserLimit {
+				return errcode.InvalidParam.WithMsg("已达到优惠码使用上限")
+			}
+		}
+		use := &model.PromoCodeUse{
+			PromoID:  promo.ID,
+			Code:     promo.Code,
+			UserID:   userID,
+			OrderNo:  &orderNo,
+			Discount: promo.DiscountAmount,
+		}
+		if err := tx.Create(use).Error; err != nil {
+			return errcode.DBError.Wrap(err)
+		}
+		return tx.Model(&model.PromoCode{}).
+			Where("id = ?", promo.ID).
+			UpdateColumn("used_qty", gorm.Expr("used_qty + 1")).Error
+	})
+}
+
+func (s *RechargeService) releasePromoReservation(ctx context.Context, row *model.RechargeRecord) error {
+	if row == nil {
+		return nil
+	}
+	extra := parseExtra(row.Extra)
+	promoID := uint64(int64FromExtra(extra, "promo_id"))
+	if promoID == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Where("promo_id = ? AND user_id = ? AND order_no = ?", promoID, row.UserID, row.OrderNo).
+			Delete(&model.PromoCodeUse{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil
+		}
+		return tx.Model(&model.PromoCode{}).
+			Where("id = ? AND used_qty > 0", promoID).
+			UpdateColumn("used_qty", gorm.Expr("used_qty - 1")).Error
+	})
+}
+
 func (s *RechargeService) packages(ctx context.Context) ([]rechargePackage, error) {
 	raw := s.sys.GetString(ctx, SettingRechargePackages, "")
 	if strings.TrimSpace(raw) == "" {
@@ -529,17 +685,21 @@ func orderResp(row *model.RechargeRecord) *dto.RechargeOrderResp {
 		paidAt = row.PaidAt.Unix()
 	}
 	return &dto.RechargeOrderResp{
-		ID:          row.ID,
-		OrderNo:     row.OrderNo,
-		Channel:     row.Channel,
-		Amount:      row.Amount,
-		Points:      row.Points,
-		BonusPoints: row.BonusPoints,
-		TotalPoints: row.Points + row.BonusPoints,
-		Status:      row.Status,
-		QRCode:      stringFromExtra(extra, "qr_code"),
-		PaidAt:      paidAt,
-		CreatedAt:   row.CreatedAt.Unix(),
+		ID:              row.ID,
+		OrderNo:         row.OrderNo,
+		Channel:         row.Channel,
+		Amount:          row.Amount,
+		OriginalAmount:  int64FromExtra(extra, "original_amount"),
+		DiscountAmount:  int64FromExtra(extra, "promo_discount"),
+		PromoCode:       stringFromExtra(extra, "promo_code"),
+		PromoGiftPoints: int64FromExtra(extra, "promo_gift_points"),
+		Points:          row.Points,
+		BonusPoints:     row.BonusPoints,
+		TotalPoints:     row.Points + row.BonusPoints,
+		Status:          row.Status,
+		QRCode:          stringFromExtra(extra, "qr_code"),
+		PaidAt:          paidAt,
+		CreatedAt:       row.CreatedAt.Unix(),
 	}
 }
 
@@ -660,6 +820,7 @@ func (s *RechargeService) expirePendingOrder(ctx context.Context, row *model.Rec
 		}
 		return refreshed, nil
 	}
+	_ = s.releasePromoReservation(ctx, row)
 	row.Status = model.RechargeStatusExpired
 	row.Extra = &extra
 	row.UpdatedAt = now
@@ -787,6 +948,25 @@ func stringFromExtra(extra map[string]any, key string) string {
 		return v
 	}
 	return ""
+}
+
+func int64FromExtra(extra map[string]any, key string) int64 {
+	switch v := extra[key].(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	case string:
+		n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		return n
+	default:
+		return 0
+	}
 }
 
 func normalizeIdemKey(v string) string {

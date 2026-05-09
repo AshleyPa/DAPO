@@ -3,6 +3,7 @@ import {
   Activity,
   CheckCircle2,
   Clock,
+  Link2,
   Pencil,
   Plus,
   Power,
@@ -16,7 +17,7 @@ import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } 
 import { ApiError } from '../../lib/api';
 import { fmtRelative, fmtTime } from '../../lib/format';
 import { proxiesApi } from '../../lib/services';
-import type { ProxyCreateBody, ProxyItem, ProxyUpdateBody } from '../../lib/types';
+import type { ProxyCreateBody, ProxyItem, ProxySubscriptionItem, ProxyUpdateBody } from '../../lib/types';
 import { toast } from '../../stores/toast';
 
 const PROTOCOLS: ProxyCreateBody['protocol'][] = ['http', 'https', 'socks5', 'socks5h'];
@@ -41,6 +42,7 @@ export default function ProxiesPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editor, setEditor] = useState<{ mode: 'create' } | { mode: 'edit'; row: ProxyItem } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [subscriptionOpen, setSubscriptionOpen] = useState(false);
   const headerCbRef = useRef<HTMLInputElement | null>(null);
   const pageSize = 20;
 
@@ -57,6 +59,11 @@ export default function ProxiesPage() {
   const list = useQuery({
     queryKey: ['admin', 'proxies', 'list', query],
     queryFn: () => proxiesApi.list(query),
+  });
+
+  const subscriptions = useQuery({
+    queryKey: ['admin', 'proxies', 'subscriptions'],
+    queryFn: () => proxiesApi.subscriptions(),
   });
 
   const refresh = () => {
@@ -118,6 +125,24 @@ export default function ProxiesPage() {
     onError: (e: ApiError) => toast.error(e.message),
   });
 
+  const syncSubscription = useMutation({
+    mutationFn: (id: number) => proxiesApi.syncSubscription(id),
+    onSuccess: (res) => {
+      refresh();
+      toast.success(`订阅已同步：${res.created} 个代理，隧道 ${res.tunnel} 个，直连 ${res.direct} 个`);
+    },
+    onError: (e: ApiError) => toast.error(e.message),
+  });
+
+  const removeSubscription = useMutation({
+    mutationFn: (id: number) => proxiesApi.removeSubscription(id),
+    onSuccess: () => {
+      refresh();
+      toast.success('订阅已删除，同步代理已移除');
+    },
+    onError: (e: ApiError) => toast.error(e.message),
+  });
+
   const total = list.data?.total ?? 0;
   const items = list.data?.list ?? [];
   const pageIds = items.map((item) => item.id);
@@ -170,6 +195,9 @@ export default function ProxiesPage() {
           </button>
           <button className="btn btn-outline btn-md" onClick={() => setImportOpen(true)}>
             <Upload size={16} /> 批量添加
+          </button>
+          <button className="btn btn-outline btn-md" onClick={() => setSubscriptionOpen(true)}>
+            <Link2 size={16} /> 订阅导入
           </button>
           <button
             className="btn btn-outline btn-md"
@@ -225,6 +253,19 @@ export default function ProxiesPage() {
           共 {total} 条，已选 {selectedCount} 条
         </span>
       </div>
+
+      <ProxySubscriptionPanel
+        rows={subscriptions.data?.list ?? []}
+        loading={subscriptions.isLoading}
+        syncingID={syncSubscription.variables}
+        syncPending={syncSubscription.isPending}
+        onRefresh={() => subscriptions.refetch()}
+        onSync={(id) => syncSubscription.mutate(id)}
+        onDelete={(id, name) => {
+          if (!confirm(`删除订阅“${name}”并移除它同步出的代理吗？`)) return;
+          removeSubscription.mutate(id);
+        }}
+      />
 
       <div className="card overflow-x-auto">
         <table className="data-table min-w-[1180px]">
@@ -285,6 +326,12 @@ export default function ProxiesPage() {
                   </td>
                   <td className="font-medium text-text-primary">
                     {item.name}
+                    {item.subscription_id && (
+                      <span className="ml-2 align-middle badge badge-klein">订阅</span>
+                    )}
+                    {item.sub_node_name && item.sub_node_name !== item.name && (
+                      <span className="mt-0.5 block text-small text-text-tertiary">节点：{item.sub_node_name}</span>
+                    )}
                     {item.remark && (
                       <span className="mt-0.5 block text-small text-text-tertiary">{item.remark}</span>
                     )}
@@ -404,7 +451,184 @@ export default function ProxiesPage() {
           }}
         />
       )}
+
+      {subscriptionOpen && (
+        <SubscriptionDialog
+          onClose={() => setSubscriptionOpen(false)}
+          onSuccess={() => {
+            setSubscriptionOpen(false);
+            refresh();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function ProxySubscriptionPanel({
+  rows,
+  loading,
+  syncingID,
+  syncPending,
+  onRefresh,
+  onSync,
+  onDelete,
+}: {
+  rows: ProxySubscriptionItem[];
+  loading: boolean;
+  syncingID?: number;
+  syncPending: boolean;
+  onRefresh: () => void;
+  onSync: (id: number) => void;
+  onDelete: (id: number, name: string) => void;
+}) {
+  return (
+    <section className="card card-section space-y-3">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-h5 font-semibold text-text-primary">订阅导入</h2>
+          <p className="text-small text-text-tertiary">
+            支持 Clash/Mihomo 订阅中的 VLESS、VMess、Trojan、SS、Hysteria2 等节点；隧道协议会由 Mihomo 转成本机 HTTP 端口。
+          </p>
+        </div>
+        <button className="btn btn-outline btn-sm" type="button" onClick={onRefresh}>
+          <RefreshCw size={14} /> 刷新订阅
+        </button>
+      </header>
+
+      {loading ? (
+        <div className="rounded-md border border-border bg-surface-2 p-4 text-center text-small text-text-tertiary">订阅加载中...</div>
+      ) : rows.length === 0 ? (
+        <div className="rounded-md border border-border bg-surface-2 p-4 text-small text-text-tertiary">
+          当前还没有订阅。迁移来的 127.0.0.1 代理需要在 V2 容器内重新同步订阅后才会可用。
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          {rows.map((row) => (
+            <div key={row.id} className="grid gap-3 rounded-md border border-border bg-surface-2 p-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-text-primary">{row.name}</span>
+                  <span className={row.status === 1 ? 'badge badge-success' : 'badge'}>{row.status === 1 ? '启用' : '停用'}</span>
+                  <span className="badge badge-outline">{row.node_count} 个节点</span>
+                </div>
+                <div className="mt-1 text-small text-text-tertiary">
+                  本地端口从 {row.port_start} 开始 · 自动同步 {row.auto_sync ? `${row.sync_interval_min} 分钟` : '关闭'}
+                  {row.last_sync_at ? ` · 上次 ${fmtRelative(row.last_sync_at)}` : ''}
+                </div>
+                {row.last_error && <div className="mt-1 line-clamp-2 text-small text-danger">{row.last_error}</div>}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                <button className="btn btn-outline btn-sm" type="button" disabled={syncPending && syncingID === row.id} onClick={() => onSync(row.id)}>
+                  <RefreshCw size={14} className={syncPending && syncingID === row.id ? 'animate-spin' : ''} />
+                  同步
+                </button>
+                <button className="btn btn-danger-ghost btn-icon btn-sm" type="button" title="删除订阅" onClick={() => onDelete(row.id, row.name)}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SubscriptionDialog({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const [name, setName] = useState('');
+  const [url, setURL] = useState('');
+  const [portStart, setPortStart] = useState(17001);
+  const [autoSync, setAutoSync] = useState(true);
+  const [syncInterval, setSyncInterval] = useState(60);
+  const [preview, setPreview] = useState<Awaited<ReturnType<typeof proxiesApi.previewSubscription>> | null>(null);
+
+  const previewMut = useMutation({
+    mutationFn: () => proxiesApi.previewSubscription(url.trim()),
+    onSuccess: (res) => {
+      setPreview(res);
+      toast.success(`识别到 ${res.node_count} 个节点`);
+    },
+    onError: (e: ApiError) => toast.error(e.message),
+  });
+
+  const createMut = useMutation({
+    mutationFn: () => proxiesApi.createSubscription({
+      name: name.trim(),
+      url: url.trim(),
+      port_start: portStart,
+      auto_sync: autoSync,
+      sync_interval_min: syncInterval,
+    }),
+    onSuccess: (res) => {
+      toast.success(`订阅已导入：${res.sync.created} 个代理`);
+      onSuccess();
+    },
+    onError: (e: ApiError) => toast.error(e.message),
+  });
+
+  return (
+    <Modal title="订阅导入" onClose={onClose}>
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!name.trim() || !url.trim()) {
+            toast.error('请填写订阅名称和 URL');
+            return;
+          }
+          createMut.mutate();
+        }}
+      >
+        <Field label="订阅名称">
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：机场订阅 / 主力出口" />
+        </Field>
+        <Field label="订阅 URL" hint="URL 会加密保存；支持 Clash/Mihomo YAML，也兼容常见 Base64 URI 订阅。">
+          <input className="input" value={url} onChange={(e) => setURL(e.target.value)} placeholder="https://..." />
+        </Field>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="起始端口">
+            <input className="input" type="number" min={1024} max={65000} value={portStart} onChange={(e) => setPortStart(Number(e.target.value) || 17001)} />
+          </Field>
+          <Field label="自动同步">
+            <select className="select" value={autoSync ? '1' : '0'} onChange={(e) => setAutoSync(e.target.value === '1')}>
+              <option value="1">开启</option>
+              <option value="0">关闭</option>
+            </select>
+          </Field>
+          <Field label="同步间隔（分钟）">
+            <input className="input" type="number" min={5} max={10080} value={syncInterval} onChange={(e) => setSyncInterval(Number(e.target.value) || 60)} />
+          </Field>
+        </div>
+
+        {preview && (
+          <div className="rounded-md border border-border bg-surface-2 p-3">
+            <div className="text-small text-text-secondary">
+              共 {preview.node_count} 个节点，隧道协议 {preview.tunnel} 个，直连代理 {preview.direct} 个。
+            </div>
+            <div className="mt-2 grid max-h-[180px] gap-1 overflow-auto text-tiny text-text-tertiary">
+              {preview.nodes.map((node, index) => (
+                <div key={`${node.name}-${index}`} className="truncate">
+                  {node.type.toUpperCase()} · {node.name} · {node.server}:{node.port}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn btn-outline btn-md" onClick={() => previewMut.mutate()} disabled={!url.trim() || previewMut.isPending}>
+            {previewMut.isPending ? '预览中...' : '预览节点'}
+          </button>
+          <button type="button" className="btn btn-outline btn-md" onClick={onClose}>
+            取消
+          </button>
+          <button type="submit" className="btn btn-primary btn-md" disabled={createMut.isPending}>
+            {createMut.isPending ? '导入中...' : '导入并同步'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

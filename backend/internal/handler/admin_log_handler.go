@@ -230,7 +230,7 @@ func (h *AdminLogHandler) servePreviewURL(c *gin.Context, t *model.GenerationTas
 
 func serveAdminCachedAsset(c *gin.Context, rel string) {
 	rel = strings.TrimLeft(rel, "/")
-	if rel == "" || strings.Contains(rel, "..") {
+	if !isAdminPublicCachedAssetPath(rel) {
 		response.Fail(c, errcode.InvalidParam.WithMsg("invalid asset path"))
 		return
 	}
@@ -240,6 +240,13 @@ func serveAdminCachedAsset(c *gin.Context, rel string) {
 	}
 	c.Header("Cache-Control", "public, max-age=86400")
 	c.File(filepath.Join(root, filepath.FromSlash(rel)))
+}
+
+func isAdminPublicCachedAssetPath(rel string) bool {
+	if rel == "" || strings.Contains(rel, "..") || strings.HasPrefix(rel, "/") {
+		return false
+	}
+	return strings.HasPrefix(rel, "generated/") || strings.HasPrefix(rel, "prompt-gallery/")
 }
 
 func proxyRemoteAsset(c *gin.Context, target, cookie, rawURL string) {

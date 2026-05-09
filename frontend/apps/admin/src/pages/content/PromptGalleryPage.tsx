@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Edit3, Images, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { Edit3, Images, Plus, RefreshCw, Search, Sparkles, Trash2, Upload } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 
 import { ApiError } from '../../lib/api';
@@ -109,6 +109,16 @@ export default function PromptGalleryPage() {
     onError: (e: ApiError | Error) => toast.error(e.message),
   });
 
+  const seedDefaults = useMutation({
+    mutationFn: () => promptGalleryApi.seedDefaults(),
+    onSuccess: (res) => {
+      toast.success(res.inserted > 0 ? `已导入 ${res.inserted} 条前台默认案例` : '默认案例已经存在');
+      qc.invalidateQueries({ queryKey: ['admin', 'prompt-gallery'] });
+      setPage(1);
+    },
+    onError: (e: ApiError | Error) => toast.error(e.message),
+  });
+
   return (
     <div className="page page-wide space-y-4">
       <header className="page-header">
@@ -124,6 +134,9 @@ export default function PromptGalleryPage() {
           </button>
           <button className="btn btn-outline btn-md" onClick={() => normalizeCurrentPageSort.mutate()} disabled={rows.length === 0 || normalizeCurrentPageSort.isPending}>
             重排当前页
+          </button>
+          <button className="btn btn-outline btn-md" onClick={() => seedDefaults.mutate()} disabled={seedDefaults.isPending}>
+            <Sparkles size={16} /> 导入默认案例
           </button>
           <button className="btn btn-primary btn-md" onClick={() => setForm(DEFAULT_FORM)}>
             <Plus size={16} /> 新增卡片
@@ -223,13 +236,21 @@ export default function PromptGalleryPage() {
 
 function PromptGalleryDialog({ form, setForm, saving, onClose, onSave }: { form: FormState; setForm: (f: FormState | null) => void; saving: boolean; onClose: () => void; onSave: () => void }) {
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setForm({ ...form, [k]: v });
+  const uploadCover = useMutation({
+    mutationFn: (file: File) => promptGalleryApi.uploadCover(file),
+    onSuccess: (res) => {
+      set('cover_url', res.url);
+      toast.success('封面已上传');
+    },
+    onError: (e: ApiError | Error) => toast.error(e.message),
+  });
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-surface-overlay p-4">
       <div className="card card-section max-h-[92vh] w-full max-w-5xl space-y-4 overflow-y-auto">
         <header className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-h4 font-semibold text-text-primary">{form.id ? '编辑快捷提示词' : '新增快捷提示词'}</h2>
-            <p className="text-small text-text-tertiary">第一版封面使用图片 URL；提示词会填入前台输入框，不会自动生成。</p>
+            <p className="text-small text-text-tertiary">封面可直接上传；提示词会填入前台输入框，不会自动生成。</p>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>关闭</button>
         </header>
@@ -255,8 +276,25 @@ function PromptGalleryDialog({ form, setForm, saving, onClose, onSave }: { form:
             <Field label="标签"><input className="input" value={form.tags} onChange={(e) => set('tags', e.target.value)} placeholder="逗号分隔：广告,产品,极简" /></Field>
             <Field label="排序"><input className="input" type="number" value={form.sort_order} onChange={(e) => set('sort_order', Number(e.target.value) || 0)} /></Field>
             <Field label="语言"><input className="input" value={form.locale} onChange={(e) => set('locale', e.target.value)} placeholder="zh-CN" /></Field>
-            <Field label="封面图 URL">
-              <input className="input" value={form.cover_url} onChange={(e) => set('cover_url', e.target.value)} placeholder="https://... 或 /examples/case-1.jpg" />
+            <Field label="封面图">
+              <div className="flex flex-col gap-2">
+                <input className="input" value={form.cover_url} onChange={(e) => set('cover_url', e.target.value)} placeholder="/api/v1/gen/cached/... 或 https://..." />
+                <label className="btn btn-outline btn-sm w-fit cursor-pointer">
+                  <Upload size={14} />
+                  {uploadCover.isPending ? '上传中...' : '上传图片'}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/avif,image/gif"
+                    className="hidden"
+                    disabled={uploadCover.isPending}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.currentTarget.value = '';
+                      if (file) uploadCover.mutate(file);
+                    }}
+                  />
+                </label>
+              </div>
             </Field>
             <Field label="变量 Schema JSON">
               <textarea className="textarea min-h-[88px] font-mono text-small" value={form.variables_schema} onChange={(e) => set('variables_schema', e.target.value)} placeholder='{"product":{"label":"产品","default":"咖啡"}}' />
@@ -274,7 +312,7 @@ function PromptGalleryDialog({ form, setForm, saving, onClose, onSave }: { form:
               {form.cover_url ? (
                 <img src={form.cover_url} alt={form.title || '预览'} className="absolute inset-0 h-full w-full object-cover" />
               ) : (
-                <div className="grid h-full place-items-center text-small text-text-tertiary">等待封面 URL</div>
+                <div className="grid h-full place-items-center text-small text-text-tertiary">等待封面</div>
               )}
               <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
               <div className="absolute bottom-3 left-3 right-3">

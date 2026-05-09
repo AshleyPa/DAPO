@@ -6,9 +6,24 @@ set -eu
 : "${KLEIN_OPENAI_PORT:=17200}"
 : "${KLEIN_LOG_DIR:=/app/logs}"
 : "${KLEIN_STORAGE_ROOT:=/app/storage}"
+: "${KLEIN_MIHOMO_HOME:=/app/private/mihomo}"
 : "${DAPO_GATEWAY_PORT:=3040}"
 
-mkdir -p "$KLEIN_LOG_DIR" "$KLEIN_STORAGE_ROOT"
+mkdir -p "$KLEIN_LOG_DIR" "$KLEIN_STORAGE_ROOT" "$KLEIN_MIHOMO_HOME"
+
+if [ ! -f "$KLEIN_MIHOMO_HOME/config.yaml" ]; then
+  cat > "$KLEIN_MIHOMO_HOME/config.yaml" <<'EOF'
+allow-lan: false
+bind-address: 127.0.0.1
+external-controller: 127.0.0.1:9090
+log-level: warning
+proxies: []
+proxy-groups: []
+listeners: []
+rules:
+  - MATCH,DIRECT
+EOF
+fi
 
 term_children() {
   if [ "${PIDS:-}" != "" ]; then
@@ -29,6 +44,11 @@ PIDS="$PIDS $!"
 
 /app/worker &
 PIDS="$PIDS $!"
+
+if command -v mihomo >/dev/null 2>&1; then
+  mihomo -d "$KLEIN_MIHOMO_HOME" &
+  PIDS="$PIDS $!"
+fi
 
 /docker-entrypoint.sh nginx -g 'daemon off;' &
 PIDS="$PIDS $!"

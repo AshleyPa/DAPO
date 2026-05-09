@@ -4,8 +4,8 @@ import (
 	"context"
 	crand "crypto/rand"
 	"fmt"
-	"net/url"
 	"math/big"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -363,17 +363,19 @@ func (s *ProxyService) parseProxyLine(adminID uint64, line string) (*model.Proxy
 
 func proxyToResp(p *model.Proxy) *dto.ProxyResp {
 	r := &dto.ProxyResp{
-		ID:           p.ID,
-		Name:         p.Name,
-		Protocol:     p.Protocol,
-		Host:         p.Host,
-		Port:         p.Port,
-		Status:       p.Status,
-		HasPassword:  len(p.PasswordEnc) > 0,
-		LastCheckOK:  p.LastCheckOK,
-		LastCheckMs:  p.LastCheckMs,
-		CreatedAt:    p.CreatedAt.Unix(),
-		UpdatedAt:    p.UpdatedAt.Unix(),
+		ID:             p.ID,
+		Name:           p.Name,
+		Protocol:       p.Protocol,
+		Host:           p.Host,
+		Port:           p.Port,
+		Status:         p.Status,
+		HasPassword:    len(p.PasswordEnc) > 0,
+		LastCheckOK:    p.LastCheckOK,
+		LastCheckMs:    p.LastCheckMs,
+		SubscriptionID: p.SubscriptionID,
+		SubNodeName:    p.SubNodeName,
+		CreatedAt:      p.CreatedAt.Unix(),
+		UpdatedAt:      p.UpdatedAt.Unix(),
 	}
 	if p.Username != nil {
 		r.Username = *p.Username

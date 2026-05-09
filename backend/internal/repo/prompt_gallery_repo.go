@@ -72,6 +72,21 @@ func (r *PromptGalleryRepo) Create(ctx context.Context, row *model.PromptGallery
 	return r.db.WithContext(ctx).Create(row).Error
 }
 
+func (r *PromptGalleryRepo) ExistsNaturalKey(ctx context.Context, modality, title string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&model.PromptGalleryItem{}).
+		Where("modality = ? AND title = ?", modality, title).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (r *PromptGalleryRepo) CreateMany(ctx context.Context, rows []*model.PromptGalleryItem) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).CreateInBatches(rows, 50).Error
+}
+
 func (r *PromptGalleryRepo) Update(ctx context.Context, id uint64, fields map[string]any) error {
 	if len(fields) == 0 {
 		return nil

@@ -45,6 +45,11 @@ import type {
   ProxyItem,
   ProxyBatchTestResp,
   ProxyTestResp,
+  ProxySubscriptionCreateBody,
+  ProxySubscriptionCreateResp,
+  ProxySubscriptionItem,
+  ProxySubscriptionPreviewResp,
+  ProxySubscriptionSyncResp,
   ProxyUpdateBody,
   SystemSettings,
 } from './types';
@@ -165,6 +170,13 @@ export const promptGalleryApi = {
   remove: (id: number) => request<void>({ url: `/prompt-gallery/${id}`, method: 'DELETE' }),
   reorder: (body: AdminPromptGalleryReorderBody) =>
     request<{ updated: number }>({ url: '/prompt-gallery/reorder', method: 'POST', data: body }),
+  seedDefaults: () =>
+    request<{ inserted: number }>({ url: '/prompt-gallery/seed-defaults', method: 'POST' }),
+  uploadCover: (file: File) => {
+    const data = new FormData();
+    data.append('file', file);
+    return request<{ url: string }>({ url: '/prompt-gallery/upload-cover', method: 'POST', data });
+  },
 };
 
 export interface AccountListQuery {
@@ -276,6 +288,16 @@ export const proxiesApi = {
     request<ProxyTestResp>({ url: `/proxies/${id}/test`, method: 'POST' }),
   batchTest: (ids: number[]) =>
     request<ProxyBatchTestResp>({ url: '/proxies/batch-test', method: 'POST', data: { ids } }),
+  subscriptions: () =>
+    request<{ list: ProxySubscriptionItem[] }>({ url: '/proxies/subscriptions', method: 'GET' }),
+  createSubscription: (body: ProxySubscriptionCreateBody) =>
+    request<ProxySubscriptionCreateResp>({ url: '/proxies/subscriptions', method: 'POST', data: body }),
+  previewSubscription: (url: string) =>
+    request<ProxySubscriptionPreviewResp>({ url: '/proxies/subscriptions/preview', method: 'POST', data: { url } }),
+  syncSubscription: (id: number) =>
+    request<ProxySubscriptionSyncResp>({ url: `/proxies/subscriptions/${id}/sync`, method: 'POST' }),
+  removeSubscription: (id: number) =>
+    request<void>({ url: `/proxies/subscriptions/${id}`, method: 'DELETE' }),
 };
 
 // ==================== 系统配置 ====================

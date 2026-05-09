@@ -569,6 +569,8 @@ export interface ProxyItem {
   last_check_ms: number;
   last_error?: string;
   remark?: string;
+  subscription_id?: number;
+  sub_node_name?: string;
   created_at: number;
   updated_at: number;
 }
@@ -616,6 +618,52 @@ export interface ProxyBatchTestResp {
   ok: number;
   failed: number;
   ids?: number[];
+}
+
+export interface ProxySubscriptionItem {
+  id: number;
+  name: string;
+  port_start: number;
+  node_count: number;
+  auto_sync: boolean;
+  sync_interval_min: number;
+  last_sync_at?: number;
+  last_error?: string;
+  status: 0 | 1 | number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ProxySubscriptionCreateBody {
+  name: string;
+  url: string;
+  port_start?: number;
+  auto_sync?: boolean;
+  sync_interval_min?: number;
+}
+
+export interface ProxySubscriptionPreviewResp {
+  node_count: number;
+  tunnel: number;
+  direct: number;
+  nodes: Array<{
+    name: string;
+    type: string;
+    server: string;
+    port: number;
+  }>;
+}
+
+export interface ProxySubscriptionSyncResp {
+  node_count: number;
+  tunnel: number;
+  direct: number;
+  created: number;
+}
+
+export interface ProxySubscriptionCreateResp {
+  subscription: ProxySubscriptionItem;
+  sync: ProxySubscriptionSyncResp;
 }
 
 // ==================== 系统配置 ====================

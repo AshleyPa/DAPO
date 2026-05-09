@@ -17,11 +17,12 @@ import (
 type AdminProxyHandler struct {
 	svc     *service.ProxyService
 	testSvc *service.AccountTestService // 复用 TestProxy 探测能力
+	subSvc  *service.ProxySubscriptionService
 }
 
 // NewAdminProxyHandler 构造。
-func NewAdminProxyHandler(svc *service.ProxyService, t *service.AccountTestService) *AdminProxyHandler {
-	return &AdminProxyHandler{svc: svc, testSvc: t}
+func NewAdminProxyHandler(svc *service.ProxyService, t *service.AccountTestService, sub *service.ProxySubscriptionService) *AdminProxyHandler {
+	return &AdminProxyHandler{svc: svc, testSvc: t, subSvc: sub}
 }
 
 // List GET /admin/api/v1/proxies
@@ -76,6 +77,95 @@ func (h *AdminProxyHandler) BatchImport(c *gin.Context) {
 		return
 	}
 	response.OK(c, res)
+}
+
+// ListSubscriptions GET /admin/api/v1/proxies/subscriptions
+func (h *AdminProxyHandler) ListSubscriptions(c *gin.Context) {
+	if h.subSvc == nil {
+		response.Fail(c, errcode.Internal.WithMsg("订阅服务未启用"))
+		return
+	}
+	rows, err := h.subSvc.List(c.Request.Context())
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, gin.H{"list": rows})
+}
+
+// CreateSubscription POST /admin/api/v1/proxies/subscriptions
+func (h *AdminProxyHandler) CreateSubscription(c *gin.Context) {
+	if h.subSvc == nil {
+		response.Fail(c, errcode.Internal.WithMsg("订阅服务未启用"))
+		return
+	}
+	var req dto.ProxySubscriptionCreateReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.InvalidParam.Wrap(err))
+		return
+	}
+	sub, sync, err := h.subSvc.Create(c.Request.Context(), middleware.UID(c), &req)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, gin.H{"subscription": sub, "sync": sync})
+}
+
+// PreviewSubscription POST /admin/api/v1/proxies/subscriptions/preview
+func (h *AdminProxyHandler) PreviewSubscription(c *gin.Context) {
+	if h.subSvc == nil {
+		response.Fail(c, errcode.Internal.WithMsg("订阅服务未启用"))
+		return
+	}
+	var req dto.ProxySubscriptionPreviewReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.InvalidParam.Wrap(err))
+		return
+	}
+	res, err := h.subSvc.Preview(c.Request.Context(), req.URL)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
+// SyncSubscription POST /admin/api/v1/proxies/subscriptions/:id/sync
+func (h *AdminProxyHandler) SyncSubscription(c *gin.Context) {
+	if h.subSvc == nil {
+		response.Fail(c, errcode.Internal.WithMsg("订阅服务未启用"))
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	res, err := h.subSvc.Sync(c.Request.Context(), id)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
+// DeleteSubscription DELETE /admin/api/v1/proxies/subscriptions/:id
+func (h *AdminProxyHandler) DeleteSubscription(c *gin.Context) {
+	if h.subSvc == nil {
+		response.Fail(c, errcode.Internal.WithMsg("订阅服务未启用"))
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	if err := h.subSvc.Delete(c.Request.Context(), id); err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, nil)
 }
 
 // Update PUT /admin/api/v1/proxies/:id

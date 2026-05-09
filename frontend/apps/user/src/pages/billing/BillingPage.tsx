@@ -18,6 +18,7 @@ export default function BillingPage() {
 
   const [page, setPage] = useState(1);
   const [code, setCode] = useState('');
+  const [promoCode, setPromoCode] = useState('');
   const [selectedPackageID, setSelectedPackageID] = useState('');
   const [activeOrderNo, setActiveOrderNo] = useState<string | null>(null);
   const [settledOrderNo, setSettledOrderNo] = useState<string | null>(null);
@@ -41,7 +42,11 @@ export default function BillingPage() {
   });
 
   const createOrder = useMutation({
-    mutationFn: (pkg: RechargePackage) => billingApi.createRechargeOrder({ package_id: pkg.id, channel: 'alipay' }),
+    mutationFn: (pkg: RechargePackage) => billingApi.createRechargeOrder({
+      package_id: pkg.id,
+      channel: 'alipay',
+      promo_code: promoCode.trim() || undefined,
+    }),
     onSuccess: (order) => {
       setActiveOrderNo(order.order_no);
       setSettledOrderNo(null);
@@ -201,11 +206,18 @@ export default function BillingPage() {
               </div>
 
               <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-border bg-surface-2 p-4">
-                <div>
+                <div className="min-w-0 flex-1">
                   <p className="text-small text-text-tertiary">当前选择</p>
                   <p className="mt-1 font-semibold text-text-primary">
                     {selectedPackage?.name ?? '请选择套餐'} · {selectedPackage ? fmtMoney(selectedPackage.amount) : '—'}
                   </p>
+                  <input
+                    className="input input-sm mt-3 max-w-sm bg-white"
+                    value={promoCode}
+                    onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+                    maxLength={32}
+                    placeholder="优惠码（可选）"
+                  />
                 </div>
                 <button
                   className="btn btn-primary btn-lg"
@@ -404,8 +416,12 @@ function PaymentPanel({
 
       <div className="mt-4 space-y-2 text-small">
         <InfoRow label="订单号" value={order.order_no} copyable />
+        {order.original_amount && order.discount_amount ? (
+          <InfoRow label="优惠抵扣" value={`-${fmtMoney(order.discount_amount)}${order.promo_code ? ` · ${order.promo_code}` : ''}`} />
+        ) : null}
         <InfoRow label="支付金额" value={fmtMoney(order.amount)} />
         <InfoRow label="到账点数" value={`${fmtPoints(order.total_points)} 点`} />
+        {order.promo_gift_points ? <InfoRow label="优惠赠点" value={`${fmtPoints(order.promo_gift_points)} 点`} /> : null}
         <InfoRow label="创建时间" value={fmtTime(order.created_at)} />
       </div>
 
