@@ -32,6 +32,19 @@ func TestCanonicalStringExcludesSignAndSignType(t *testing.T) {
 	}
 }
 
+func TestRequestCanonicalStringIncludesSignType(t *testing.T) {
+	got := requestCanonicalString(map[string]string{
+		"method":    "alipay.trade.precreate",
+		"app_id":    "app_123",
+		"sign":      "ignored",
+		"sign_type": "RSA2",
+	})
+	want := "app_id=app_123&method=alipay.trade.precreate&sign_type=RSA2"
+	if got != want {
+		t.Fatalf("requestCanonicalString() = %q, want %q", got, want)
+	}
+}
+
 func TestPrecreateVerifiesResponseSignature(t *testing.T) {
 	appKey := mustRSAKey(t)
 	alipayKey := mustRSAKey(t)
@@ -49,10 +62,10 @@ func TestPrecreateVerifiesResponseSignature(t *testing.T) {
 		for k := range values {
 			params[k] = values.Get(k)
 		}
-		if strings.Contains(canonicalString(params), "sign_type") {
-			t.Errorf("request canonical string must not include sign_type")
+		if !strings.Contains(requestCanonicalString(params), "sign_type") {
+			t.Errorf("request canonical string must include sign_type")
 		}
-		if !verifyWithPublic(&appKey.PublicKey, canonicalString(params), params["sign"]) {
+		if !verifyWithPublic(&appKey.PublicKey, requestCanonicalString(params), params["sign"]) {
 			return nil, fmt.Errorf("request signature failed")
 		}
 
@@ -129,7 +142,7 @@ func TestQueryVerifiesResponseSignatureAndParsesStatus(t *testing.T) {
 			return nil, fmt.Errorf("method = %q", values.Get("method"))
 		}
 		params := valuesToMap(values)
-		if !verifyWithPublic(&appKey.PublicKey, canonicalString(params), params["sign"]) {
+		if !verifyWithPublic(&appKey.PublicKey, requestCanonicalString(params), params["sign"]) {
 			return nil, fmt.Errorf("request signature failed")
 		}
 		response := `{"code":"10000","msg":"Success","out_trade_no":"R1","trade_no":"T1","trade_status":"TRADE_SUCCESS","total_amount":10.00,"buyer_user_id":"2088"}`
@@ -176,7 +189,7 @@ func TestCloseVerifiesResponseSignature(t *testing.T) {
 			return nil, fmt.Errorf("method = %q", values.Get("method"))
 		}
 		params := valuesToMap(values)
-		if !verifyWithPublic(&appKey.PublicKey, canonicalString(params), params["sign"]) {
+		if !verifyWithPublic(&appKey.PublicKey, requestCanonicalString(params), params["sign"]) {
 			return nil, fmt.Errorf("request signature failed")
 		}
 		response := `{"code":"10000","msg":"Success","out_trade_no":"R1","trade_no":"T1"}`

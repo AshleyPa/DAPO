@@ -391,7 +391,7 @@ func (c *Client) sign(params map[string]string) (string, error) {
 	if c.privateKey == nil {
 		return "", ErrDisabled
 	}
-	sum := sha256.Sum256([]byte(canonicalString(params)))
+	sum := sha256.Sum256([]byte(requestCanonicalString(params)))
 	sig, err := rsa.SignPKCS1v15(rand.Reader, c.privateKey, crypto.SHA256, sum[:])
 	if err != nil {
 		return "", err
@@ -400,9 +400,17 @@ func (c *Client) sign(params map[string]string) (string, error) {
 }
 
 func canonicalString(params map[string]string) string {
+	return canonicalStringWithSignType(params, false)
+}
+
+func requestCanonicalString(params map[string]string) string {
+	return canonicalStringWithSignType(params, true)
+}
+
+func canonicalStringWithSignType(params map[string]string, includeSignType bool) string {
 	keys := make([]string, 0, len(params))
 	for k, v := range params {
-		if k == "sign" || k == "sign_type" {
+		if k == "sign" || (!includeSignType && k == "sign_type") {
 			continue
 		}
 		if v == "" {
