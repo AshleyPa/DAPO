@@ -3,6 +3,9 @@ package gpt
 import (
 	"strings"
 	"testing"
+
+	"github.com/kleinai/backend/internal/model"
+	"github.com/kleinai/backend/internal/provider"
 )
 
 func TestExtractWebImageToolIDs(t *testing.T) {
@@ -149,5 +152,23 @@ func TestExtractWebImageDirectURLsIgnoresChatGPTStaticAssets(t *testing.T) {
 	urls := extractWebImageDirectURLs(raw)
 	if len(urls) != 1 || !strings.Contains(urls[0], "files.oaiusercontent.com") {
 		t.Fatalf("expected only generated asset URL, got %#v", urls)
+	}
+}
+
+func TestShouldUseWebImage2SkipsAPIKeyAccounts(t *testing.T) {
+	if shouldUseWebImage2(&provider.Request{
+		ModelCode: "gpt-image-2",
+		Params:    map[string]any{"resolution": "1K"},
+		Account:   &model.Account{AuthType: model.AuthTypeAPIKey},
+	}) {
+		t.Fatal("api_key OpenAI-compatible accounts must not use ChatGPT web image2 route")
+	}
+
+	if !shouldUseWebImage2(&provider.Request{
+		ModelCode: "gpt-image-2",
+		Params:    map[string]any{"resolution": "1K"},
+		Account:   &model.Account{AuthType: model.AuthTypeOAuth},
+	}) {
+		t.Fatal("oauth accounts should keep the ChatGPT web image2 route for 1K requests")
 	}
 }

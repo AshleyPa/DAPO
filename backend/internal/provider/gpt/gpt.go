@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kleinai/backend/internal/model"
 	"github.com/kleinai/backend/internal/provider"
 	"github.com/kleinai/backend/pkg/outbound"
 	"golang.org/x/crypto/sha3"
@@ -1423,6 +1424,9 @@ func copyParam(dst map[string]any, src map[string]any, key string) {
 }
 
 func shouldUseWebImage2(req *provider.Request) bool {
+	if req != nil && req.Account != nil && req.Account.AuthType == model.AuthTypeAPIKey {
+		return false
+	}
 	tier := strings.ToUpper(strings.TrimSpace(strParam(req.Params, "resolution", strParam(req.Params, "size_tier", ""))))
 	if tier == "" {
 		size := strParam(req.Params, "size", "")
