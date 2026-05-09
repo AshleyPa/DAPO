@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/kleinai/backend/internal/dto"
 	"github.com/kleinai/backend/internal/model"
 	"github.com/kleinai/backend/pkg/crypto"
 	"github.com/kleinai/backend/pkg/errcode"
@@ -27,6 +28,107 @@ type CDKService struct {
 // NewCDKService 构造。
 func NewCDKService(db *gorm.DB, b *BillingService) *CDKService {
 	return &CDKService{db: db, billing: b}
+}
+
+// ListBatches 管理后台 CDK 批次列表。
+func (s *CDKService) ListBatches(ctx context.Context, req *dto.CDKBatchListReq) ([]*dto.CDKBatchResp, int64, error) {
+	page, pageSize := req.Page, req.PageSize
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 200 {
+		pageSize = 20
+	}
+
+	q := s.db.WithContext(ctx).Model(&model.RedeemCodeBatch{})
+	if req.Status != nil {
+		q = q.Where("status = ?", *req.Status)
+	}
+	if kw := strings.TrimSpace(req.Keyword); kw != "" {
+		like := "%" + kw + "%"
+		q = q.Where("CAST(id AS CHAR) = ? OR batch_no LIKE ? OR name LIKE ?", kw, like, like)
+	}
+
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, errcode.DBError.Wrap(err)
+	}
+
+	var rows []*model.RedeemCodeBatch
+	if err := q.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+		return nil, 0, errcode.DBError.Wrap(err)
+	}
+
+	out := make([]*dto.CDKBatchResp, 0, len(rows))
+	for _, row := range rows {
+		points, err := parsePointsReward(row.RewardType, row.RewardValue)
+		if err != nil {
+			return nil, 0, errcode.Internal.Wrap(err)
+		}
+		resp := &dto.CDKBatchResp{
+			ID:           row.ID,
+			BatchNo:      row.BatchNo,
+			Name:         row.Name,
+			RewardType:   row.RewardType,
+			Points:       points,
+			TotalQty:     row.TotalQty,
+			UsedQty:      row.UsedQty,
+			PerUserLimit: row.PerUserLimit,
+			Status:       row.Status,
+			CreatedAt:    row.CreatedAt.Unix(),
+		}
+		if row.ExpireAt != nil {
+			resp.ExpireAt = row.ExpireAt.Unix()
+		}
+		if row.CreatedBy != nil {
+			resp.CreatedBy = *row.CreatedBy
+		}
+		out = append(out, resp)
+	}
+	return out, total, nil
+}
+
+// ListCodes 管理后台 CDK 明细列表。
+func (s *CDKService) ListCodes(ctx context.Context, batchID uint64, req *dto.CDKCodeListReq) ([]*dto.CDKCodeResp, int64, error) {
+	page, pageSize := req.Page, req.PageSize
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 5000 {
+		pageSize = 200
+	}
+
+	q := s.db.WithContext(ctx).Model(&model.RedeemCode{}).Where("batch_id = ?", batchID)
+	if req.Status != nil {
+		q = q.Where("status = ?", *req.Status)
+	}
+
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, errcode.DBError.Wrap(err)
+	}
+
+	var rows []*model.RedeemCode
+	if err := q.Order("id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+		return nil, 0, errcode.DBError.Wrap(err)
+	}
+
+	out := make([]*dto.CDKCodeResp, 0, len(rows))
+	for _, row := range rows {
+		resp := &dto.CDKCodeResp{
+			ID:        row.ID,
+			BatchID:   row.BatchID,
+			Code:      row.Code,
+			Status:    row.Status,
+			UsedBy:    row.UsedBy,
+			CreatedAt: row.CreatedAt.Unix(),
+		}
+		if row.UsedAt != nil {
+			resp.UsedAt = row.UsedAt.Unix()
+		}
+		out = append(out, resp)
+	}
+	return out, total, nil
 }
 
 // Redeem 用户兑换 CDK。

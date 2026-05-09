@@ -162,7 +162,9 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 		cdk := authed.Group("/cdk")
 		cdk.Use(superOnly)
 		{
+			cdk.GET("/batches", cdkH.ListBatches)
 			cdk.POST("/batches", cdkH.CreateBatch)
+			cdk.GET("/batches/:id/codes", cdkH.ListCodes)
 		}
 
 		billing := authed.Group("/billing")

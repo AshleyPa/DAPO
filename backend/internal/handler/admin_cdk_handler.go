@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -23,6 +24,28 @@ func NewAdminCDKHandler(svc *service.CDKService) *AdminCDKHandler {
 	return &AdminCDKHandler{svc: svc}
 }
 
+// ListBatches GET /admin/api/v1/cdk/batches
+func (h *AdminCDKHandler) ListBatches(c *gin.Context) {
+	var req dto.CDKBatchListReq
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.Fail(c, errcode.InvalidParam.Wrap(err))
+		return
+	}
+	rows, total, err := h.svc.ListBatches(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	page, pageSize := req.Page, req.PageSize
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	response.Page(c, rows, total, page, pageSize)
+}
+
 // CreateBatch POST /admin/api/v1/cdk/batches
 func (h *AdminCDKHandler) CreateBatch(c *gin.Context) {
 	var req dto.CDKBatchCreateReq
@@ -41,9 +64,32 @@ func (h *AdminCDKHandler) CreateBatch(c *gin.Context) {
 		response.Fail(c, err)
 		return
 	}
-	response.OK(c, gin.H{
-		"id":        batch.ID,
-		"batch_no":  batch.BatchNo,
-		"total_qty": batch.TotalQty,
-	})
+	response.OK(c, dto.CDKBatchCreateResp{ID: batch.ID, BatchNo: batch.BatchNo, TotalQty: batch.TotalQty})
+}
+
+// ListCodes GET /admin/api/v1/cdk/batches/:id/codes
+func (h *AdminCDKHandler) ListCodes(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	var req dto.CDKCodeListReq
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.Fail(c, errcode.InvalidParam.Wrap(err))
+		return
+	}
+	rows, total, err := h.svc.ListCodes(c.Request.Context(), id, &req)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	page, pageSize := req.Page, req.PageSize
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 200
+	}
+	response.Page(c, rows, total, page, pageSize)
 }

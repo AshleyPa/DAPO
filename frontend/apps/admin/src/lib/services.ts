@@ -31,6 +31,8 @@ import type {
   AdminWalletLogItem,
   AdminLoginResp,
   AdminMe,
+  CDKBatchItem,
+  CDKCodeItem,
   CDKCreateBatchBody,
   CDKCreateBatchResp,
   DashboardOverviewResp,
@@ -254,12 +256,16 @@ export const accountsApi = {
 };
 
 export const cdkApi = {
+  listBatches: (q: { keyword?: string; status?: 0 | 1 | 2 | ''; page?: number; page_size?: number } = {}) =>
+    request<PageData<CDKBatchItem>>({ url: '/cdk/batches', method: 'GET', params: q }),
   createBatch: (body: CDKCreateBatchBody) =>
     request<CDKCreateBatchResp>({
       url: '/cdk/batches',
       method: 'POST',
       data: body,
     }),
+  listCodes: (batchId: number, q: { status?: 0 | 1 | 2 | ''; page?: number; page_size?: number } = {}) =>
+    request<PageData<CDKCodeItem>>({ url: `/cdk/batches/${batchId}/codes`, method: 'GET', params: q }),
 };
 
 // ==================== 代理 ====================

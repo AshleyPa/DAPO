@@ -551,6 +551,31 @@ export interface CDKCreateBatchResp {
   total_qty: number;
 }
 
+export interface CDKBatchItem {
+  id: number;
+  batch_no: string;
+  name: string;
+  reward_type: string;
+  points: number;
+  total_qty: number;
+  used_qty: number;
+  per_user_limit: number;
+  expire_at?: number;
+  status: 0 | 1 | 2;
+  created_by?: number;
+  created_at: number;
+}
+
+export interface CDKCodeItem {
+  id: number;
+  batch_id: number;
+  code: string;
+  status: 0 | 1 | 2;
+  used_by?: number;
+  used_at?: number;
+  created_at: number;
+}
+
 // ==================== 代理 ====================
 
 export interface ProxyItem {

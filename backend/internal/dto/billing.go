@@ -42,6 +42,55 @@ type RechargeOrderResp struct {
 	CreatedAt       int64  `json:"created_at"`
 }
 
+// CDKBatchListReq 管理后台 CDK 批次列表。
+type CDKBatchListReq struct {
+	Keyword  string `form:"keyword" binding:"omitempty,max=128"`
+	Status   *int   `form:"status" binding:"omitempty,oneof=0 1 2"`
+	Page     int    `form:"page" binding:"omitempty,min=1"`
+	PageSize int    `form:"page_size" binding:"omitempty,min=1,max=200"`
+}
+
+// CDKBatchResp 管理后台 CDK 批次响应。
+type CDKBatchResp struct {
+	ID           uint64 `json:"id"`
+	BatchNo      string `json:"batch_no"`
+	Name         string `json:"name"`
+	RewardType   string `json:"reward_type"`
+	Points       int64  `json:"points"`
+	TotalQty     int    `json:"total_qty"`
+	UsedQty      int    `json:"used_qty"`
+	PerUserLimit int    `json:"per_user_limit"`
+	ExpireAt     int64  `json:"expire_at,omitempty"`
+	Status       int8   `json:"status"`
+	CreatedBy    uint64 `json:"created_by,omitempty"`
+	CreatedAt    int64  `json:"created_at"`
+}
+
+// CDKCodeListReq 管理后台 CDK 明细列表。
+type CDKCodeListReq struct {
+	Status   *int `form:"status" binding:"omitempty,oneof=0 1 2"`
+	Page     int  `form:"page" binding:"omitempty,min=1"`
+	PageSize int  `form:"page_size" binding:"omitempty,min=1,max=5000"`
+}
+
+// CDKCodeResp 管理后台 CDK 明细响应。
+type CDKCodeResp struct {
+	ID        uint64  `json:"id"`
+	BatchID   uint64  `json:"batch_id"`
+	Code      string  `json:"code"`
+	Status    int8    `json:"status"`
+	UsedBy    *uint64 `json:"used_by,omitempty"`
+	UsedAt    int64   `json:"used_at,omitempty"`
+	CreatedAt int64   `json:"created_at"`
+}
+
+// CDKBatchCreateResp 管理后台创建 CDK 批次响应。
+type CDKBatchCreateResp struct {
+	ID       uint64 `json:"id"`
+	BatchNo  string `json:"batch_no"`
+	TotalQty int    `json:"total_qty"`
+}
+
 // WalletLogResp 钱包流水响应（一行）。
 type WalletLogResp struct {
 	ID           uint64 `json:"id"`
