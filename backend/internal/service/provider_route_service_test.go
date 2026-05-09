@@ -34,6 +34,28 @@ func TestPickProviderRouteOptionPriorityBeforeWeight(t *testing.T) {
 	}
 }
 
+func TestPickProviderRouteOptionsKeepsFallbackOrder(t *testing.T) {
+	no := false
+	got := pickProviderRouteOptions([]ProviderRouteOption{
+		{Provider: "gpt", Priority: 20, Weight: 100},
+		{Provider: "grok", Priority: 10, Weight: 1},
+		{Provider: "gpt", Priority: 10, Weight: 50, UpstreamModel: "gpt-image-2"},
+		{Provider: "skip", Priority: 0, Weight: 999, Enabled: &no},
+	})
+	if len(got) != 3 {
+		t.Fatalf("expected three enabled candidates, got %d", len(got))
+	}
+	if got[0].Provider != "gpt" || got[0].UpstreamModel != "gpt-image-2" {
+		t.Fatalf("expected same-priority candidate with higher weight first, got %#v", got[0])
+	}
+	if got[1].Provider != "grok" {
+		t.Fatalf("expected grok second, got %#v", got[1])
+	}
+	if got[2].Provider != "gpt" || got[2].Priority != 20 {
+		t.Fatalf("expected lower priority candidate last, got %#v", got[2])
+	}
+}
+
 func TestFindProviderRouteRulePrefersSpecificModel(t *testing.T) {
 	rule, ok := findProviderRouteRule([]ProviderRouteRule{
 		{Kind: "text", ModelCode: "*", Routes: []ProviderRouteOption{{Provider: "grok"}}},
@@ -122,6 +144,38 @@ func TestProviderRouteResolveExplainReportsFallbackReason(t *testing.T) {
 	}
 	if trace.FallbackReason == "" {
 		t.Fatalf("expected fallback reason")
+	}
+}
+
+func TestProviderRouteResolveCandidatesFallsBackWhenUninitialized(t *testing.T) {
+	svc := &ProviderRouteService{}
+	routes, trace := svc.ResolveCandidates(context.Background(), "image", "gpt-image-2", "gpt")
+	if len(routes) != 1 {
+		t.Fatalf("expected one fallback route, got %d", len(routes))
+	}
+	if routes[0].Provider != "gpt" || routes[0].UpstreamModel != "gpt-image-2" || routes[0].Strategy != "round_robin" {
+		t.Fatalf("unexpected fallback route: %#v", routes[0])
+	}
+	if trace.MatchedConfig || trace.FallbackReason == "" {
+		t.Fatalf("expected fallback trace, got %#v", trace)
+	}
+}
+
+func TestDecodeProviderRouteCandidates(t *testing.T) {
+	raw := []any{
+		map[string]any{"provider": "gpt", "upstream_model": "gpt-image-2", "strategy": "weighted_rr"},
+		map[string]any{"provider": "gpt", "upstream_model": "gpt-image-2", "strategy": "weighted_rr"},
+		map[string]any{"provider": "grok", "auth_type": "cookie"},
+	}
+	got := decodeProviderRouteCandidates(raw, "public-model")
+	if len(got) != 2 {
+		t.Fatalf("expected duplicate candidates to be removed, got %d", len(got))
+	}
+	if got[0].Provider != "gpt" || got[0].UpstreamModel != "gpt-image-2" || got[0].Strategy != "weighted_rr" {
+		t.Fatalf("unexpected first candidate: %#v", got[0])
+	}
+	if got[1].Provider != "grok" || got[1].UpstreamModel != "public-model" || got[1].AuthType != "cookie" {
+		t.Fatalf("unexpected second candidate: %#v", got[1])
 	}
 }
 

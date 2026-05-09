@@ -37,22 +37,43 @@ func (s *ProviderRouteTestService) Test(ctx context.Context, req dto.ProviderRou
 		return nil, errcode.InvalidParam.WithMsg("fallback_provider 只能是 gpt 或 grok")
 	}
 
-	route, trace := ProviderRoute{
+	routes, trace := []ProviderRoute{{
 		Provider:      fallback,
 		UpstreamModel: modelCode,
 		Strategy:      "round_robin",
-	}, ProviderRouteTrace{FallbackReason: "provider.routes 未初始化"}
+	}}, ProviderRouteTrace{FallbackReason: "provider.routes 未初始化"}
 	if s.routeSvc != nil {
-		route, trace = s.routeSvc.ResolveExplain(ctx, provider.Kind(kind), modelCode, fallback)
+		routes, trace = s.routeSvc.ResolveCandidates(ctx, provider.Kind(kind), modelCode, fallback)
 	}
-	if route.Provider == model.ProviderGPT && (kind == "text" || kind == string(provider.KindChat)) && strings.EqualFold(route.UpstreamModel, modelCode) {
-		route.UpstreamModel = chatUpstreamModelFromConfig(ctx, s.routeSvc, modelCode)
+	if len(routes) == 0 {
+		routes = []ProviderRoute{{Provider: fallback, UpstreamModel: modelCode, Strategy: "round_robin"}}
 	}
 
-	candidateAccounts, availableAccounts, warning, err := s.accountStats(ctx, route, modelCode)
-	if err != nil {
-		return nil, err
+	candidates := make([]dto.ProviderRouteCandidateResp, 0, len(routes))
+	for i, route := range routes {
+		if route.Provider == model.ProviderGPT && (kind == "text" || kind == string(provider.KindChat)) && strings.EqualFold(route.UpstreamModel, modelCode) {
+			route.UpstreamModel = chatUpstreamModelFromConfig(ctx, s.routeSvc, modelCode)
+			routes[i] = route
+		}
+		candidateAccounts, availableAccounts, warning, err := s.accountStats(ctx, route, modelCode)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, dto.ProviderRouteCandidateResp{
+			Index:             i + 1,
+			Provider:          route.Provider,
+			UpstreamModel:     route.UpstreamModel,
+			AuthType:          route.AuthType,
+			Strategy:          route.Strategy,
+			CandidateAccounts: candidateAccounts,
+			AvailableAccounts: availableAccounts,
+			Warning:           warning,
+		})
 	}
+	route := routes[0]
+	candidateAccounts := candidates[0].CandidateAccounts
+	availableAccounts := candidates[0].AvailableAccounts
+	warning := candidates[0].Warning
 	if warning == "" && !trace.MatchedConfig && trace.FallbackReason != "" {
 		warning = trace.FallbackReason
 	}
@@ -71,6 +92,7 @@ func (s *ProviderRouteTestService) Test(ctx context.Context, req dto.ProviderRou
 		CandidateAccounts: candidateAccounts,
 		AvailableAccounts: availableAccounts,
 		Warning:           warning,
+		Candidates:        candidates,
 	}, nil
 }
 

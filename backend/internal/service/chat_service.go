@@ -77,7 +77,35 @@ func NewChatService(db *gorm.DB, r *repo.GenerationRepo, pool *AccountPool, bill
 
 func (s *ChatService) Complete(ctx context.Context, req ChatCallRequest) ([]byte, int, error) {
 	modelCode := strAny(req.Body["model"], "gpt-4o-mini")
-	route := s.chatRoute(ctx, modelCode)
+	routes := s.chatRoutes(ctx, modelCode)
+	var lastRaw []byte
+	var lastStatus int
+	var lastErr error
+	for i, route := range routes {
+		attemptReq := req
+		attemptReq.Body = cloneChatBody(req.Body)
+		if i > 0 && req.IdemKey != "" {
+			attemptReq.IdemKey = fmt.Sprintf("%s-route-%d", req.IdemKey, i+1)
+		}
+		raw, status, err := s.completeRoute(ctx, attemptReq, modelCode, route)
+		if err == nil {
+			return raw, status, nil
+		}
+		lastRaw, lastStatus, lastErr = raw, status, err
+		if !retryableChatFallback(status, err) {
+			return raw, status, err
+		}
+	}
+	if lastRaw != nil && lastStatus > 0 {
+		return lastRaw, lastStatus, nil
+	}
+	if lastStatus == 0 {
+		lastStatus = http.StatusBadGateway
+	}
+	return nil, lastStatus, lastErr
+}
+
+func (s *ChatService) completeRoute(ctx context.Context, req ChatCallRequest, modelCode string, route ProviderRoute) ([]byte, int, error) {
 	if route.Provider == model.ProviderGROK {
 		return s.completeGrok(ctx, req, modelCode, route)
 	}
@@ -99,7 +127,11 @@ func (s *ChatService) Complete(ctx context.Context, req ChatCallRequest) ([]byte
 		return nil, status, err
 	}
 	if status >= 400 {
-		s.fail(ctx, t, fmt.Sprintf("upstream http %d: %s", status, snippet(raw, 240)))
+		msg := fmt.Sprintf("upstream http %d: %s", status, snippet(raw, 240))
+		s.fail(ctx, t, msg)
+		if retryableChatHTTPStatus(status) {
+			return raw, status, fmt.Errorf("chat upstream retryable failure: %s", msg)
+		}
 		return raw, status, nil
 	}
 	actual := estimate
@@ -519,28 +551,45 @@ func (s *ChatService) prepare(ctx context.Context, req ChatCallRequest, modelCod
 }
 
 func (s *ChatService) chatRoute(ctx context.Context, modelCode string) ProviderRoute {
+	routes := s.chatRoutes(ctx, modelCode)
+	if len(routes) == 0 {
+		return ProviderRoute{Provider: model.ProviderGPT, UpstreamModel: modelCode, Strategy: "round_robin"}
+	}
+	return routes[0]
+}
+
+func (s *ChatService) chatRoutes(ctx context.Context, modelCode string) []ProviderRoute {
 	fallback := model.ProviderGPT
 	if grokweb.IsChatModel(modelCode) {
 		fallback = model.ProviderGROK
 	}
-	route := ProviderRoute{Provider: fallback, UpstreamModel: modelCode, Strategy: "round_robin"}
+	routes := []ProviderRoute{{Provider: fallback, UpstreamModel: modelCode, Strategy: "round_robin"}}
 	if s.routeSvc != nil {
-		route = s.routeSvc.Resolve(ctx, provider.KindChat, modelCode, fallback)
+		if resolved, _ := s.routeSvc.ResolveCandidates(ctx, provider.KindChat, modelCode, fallback); len(resolved) > 0 {
+			routes = resolved
+		}
 	}
-	if strings.TrimSpace(route.Provider) == "" {
-		route.Provider = fallback
+	out := make([]ProviderRoute, 0, len(routes))
+	for _, route := range routes {
+		if strings.TrimSpace(route.Provider) == "" {
+			route.Provider = fallback
+		}
+		if strings.TrimSpace(route.Strategy) == "" {
+			route.Strategy = "round_robin"
+		}
+		if strings.TrimSpace(route.UpstreamModel) == "" {
+			route.UpstreamModel = modelCode
+		}
+		if route.Provider == model.ProviderGPT && strings.EqualFold(route.UpstreamModel, modelCode) {
+			route.UpstreamModel = s.upstreamModel(modelCode)
+		}
+		route.Strategy = normalizeRouteStrategy(route.Strategy)
+		out = appendProviderRouteCandidate(out, route)
 	}
-	if strings.TrimSpace(route.Strategy) == "" {
-		route.Strategy = "round_robin"
+	if len(out) == 0 {
+		out = append(out, ProviderRoute{Provider: fallback, UpstreamModel: modelCode, Strategy: "round_robin"})
 	}
-	if strings.TrimSpace(route.UpstreamModel) == "" {
-		route.UpstreamModel = modelCode
-	}
-	if route.Provider == model.ProviderGPT && strings.EqualFold(route.UpstreamModel, modelCode) {
-		route.UpstreamModel = s.upstreamModel(modelCode)
-	}
-	route.Strategy = normalizeRouteStrategy(route.Strategy)
-	return route
+	return out
 }
 
 func (s *ChatService) callJSON(ctx context.Context, acc *model.Account, body map[string]any) ([]byte, int, *ChatUsage, error) {
@@ -710,6 +759,25 @@ func strAny(v any, def string) string {
 		return strings.TrimSpace(s)
 	}
 	return def
+}
+
+func cloneChatBody(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func retryableChatFallback(status int, err error) bool {
+	if retryableChatHTTPStatus(status) {
+		return true
+	}
+	return retryableProviderError(err)
+}
+
+func retryableChatHTTPStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout || status >= 500
 }
 
 func intAny(v any, def int) int {

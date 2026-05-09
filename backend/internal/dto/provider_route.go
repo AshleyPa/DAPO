@@ -10,17 +10,29 @@ type ProviderRouteTestReq struct {
 // ProviderRouteTestResp explains the effective provider route without
 // touching upstream services or account credentials.
 type ProviderRouteTestResp struct {
-	Kind              string `json:"kind"`
-	ModelCode         string `json:"model_code"`
-	FallbackProvider  string `json:"fallback_provider"`
+	Kind              string                       `json:"kind"`
+	ModelCode         string                       `json:"model_code"`
+	FallbackProvider  string                       `json:"fallback_provider"`
+	Provider          string                       `json:"provider"`
+	UpstreamModel     string                       `json:"upstream_model"`
+	AuthType          string                       `json:"auth_type,omitempty"`
+	Strategy          string                       `json:"strategy"`
+	MatchedConfig     bool                         `json:"matched_config"`
+	MatchedKind       string                       `json:"matched_kind,omitempty"`
+	MatchedModelCode  string                       `json:"matched_model_code,omitempty"`
+	FallbackReason    string                       `json:"fallback_reason,omitempty"`
+	CandidateAccounts int                          `json:"candidate_accounts"`
+	AvailableAccounts int                          `json:"available_accounts"`
+	Warning           string                       `json:"warning,omitempty"`
+	Candidates        []ProviderRouteCandidateResp `json:"candidates,omitempty"`
+}
+
+type ProviderRouteCandidateResp struct {
+	Index             int    `json:"index"`
 	Provider          string `json:"provider"`
 	UpstreamModel     string `json:"upstream_model"`
 	AuthType          string `json:"auth_type,omitempty"`
 	Strategy          string `json:"strategy"`
-	MatchedConfig     bool   `json:"matched_config"`
-	MatchedKind       string `json:"matched_kind,omitempty"`
-	MatchedModelCode  string `json:"matched_model_code,omitempty"`
-	FallbackReason    string `json:"fallback_reason,omitempty"`
 	CandidateAccounts int    `json:"candidate_accounts"`
 	AvailableAccounts int    `json:"available_accounts"`
 	Warning           string `json:"warning,omitempty"`

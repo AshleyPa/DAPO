@@ -207,11 +207,11 @@ func (r *GenerationRepo) GetByIdem(ctx context.Context, userID uint64, idem stri
 func (r *GenerationRepo) SetRunning(ctx context.Context, taskID string, accountID uint64) error {
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Model(&model.GenerationTask{}).
-		Where("task_id = ? AND status = ?", taskID, model.GenStatusPending).
+		Where("task_id = ? AND status IN ?", taskID, []int8{model.GenStatusPending, model.GenStatusRunning}).
 		Updates(map[string]any{
 			"status":     model.GenStatusRunning,
 			"account_id": accountID,
-			"started_at": now,
+			"started_at": gorm.Expr("COALESCE(started_at, ?)", now),
 			"progress":   5,
 		}).Error
 }

@@ -42,6 +42,7 @@ const (
 	routeParamUpstreamModel = "_provider_route_upstream_model"
 	routeParamStrategy      = "_provider_route_strategy"
 	routeParamAuthType      = "_provider_route_auth_type"
+	routeParamCandidates    = "_provider_route_candidates"
 )
 
 // GenerationService 生成调度服务。
@@ -182,12 +183,7 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 
 	var params map[string]any
 	_ = json.Unmarshal([]byte(t.Params), &params)
-	route := providerRouteFromParams(params, t.Provider, t.ModelCode)
-	prov, ok := s.providers[route.Provider]
-	if !ok {
-		s.failTask(ctx, t, "provider not registered: "+route.Provider)
-		return
-	}
+	routes := providerRoutesFromParams(params, t.Provider, t.ModelCode)
 	var refs []string
 	if t.RefAssets != nil {
 		_ = json.Unmarshal([]byte(*t.RefAssets), &refs)
@@ -198,7 +194,7 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 	if t.Kind == "video" {
 		timeout = 15 * time.Minute
 	}
-	if t.Provider == model.ProviderGPT && t.Kind == string(provider.KindImage) && strings.EqualFold(t.ModelCode, "gpt-image-2") && shouldUseGPTWebRoute(params) {
+	if shouldUseExtendedGPTImageTimeout(t, params, routes) {
 		timeout = 10 * time.Minute
 	}
 	maxAttempts := 3
@@ -208,23 +204,38 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 		maxAttempts = s.cfg.RetryMaxAttempts(ctx)
 		retryDelay = s.cfg.RetryBaseDelay(ctx)
 	}
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
 	var acc *model.Account
 	var res *provider.Result
 	var lastErr error
+	attemptLimit := maxAttempts
+	if len(routes) > attemptLimit {
+		attemptLimit = len(routes)
+	}
 	releaseAcc := func(a *model.Account) {
 		if a != nil {
 			s.pool.Release(a.ID)
 		}
 	}
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		picked, err := s.pickAccountForTask(ctx, t, params)
+	for attempt := 1; attempt <= attemptLimit; attempt++ {
+		route := routes[(attempt-1)%len(routes)]
+		prov, ok := s.providers[route.Provider]
+		if !ok {
+			lastErr = fmt.Errorf("provider not registered: %s", route.Provider)
+			log.Warn("provider route unavailable", zap.Int("attempt", attempt), zap.String("provider", route.Provider), zap.String("upstream_model", route.UpstreamModel), zap.Error(lastErr))
+			continue
+		}
+		picked, err := s.pickAccountForRoute(ctx, t, route, params)
 		if err != nil {
-			if lastErr != nil {
-				s.failTask(ctx, t, fmt.Sprintf("provider call: %v", lastErr))
-			} else {
-				s.failTask(ctx, t, fmt.Sprintf("pick account: %v", err))
+			lastErr = fmt.Errorf("pick account for %s/%s: %w", route.Provider, route.UpstreamModel, err)
+			log.Warn("provider route pick account failed", zap.Int("attempt", attempt), zap.String("provider", route.Provider), zap.String("upstream_model", route.UpstreamModel), zap.Error(err))
+			if attempt < attemptLimit {
+				sleepBeforeRetry(ctx, retryDelay, attempt)
+				continue
 			}
-			return
+			break
 		}
 		acc = picked
 		if err := s.repo.SetRunning(ctx, t.TaskID, acc.ID); err != nil {
@@ -242,13 +253,13 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 			Count:     t.Count,
 			Account:   acc,
 		}
-		provReq.UpstreamLog = s.makeUpstreamLogger(t, acc)
+		provReq.UpstreamLog = s.makeUpstreamLoggerForProvider(t, acc, route.Provider)
 		if t.NegPrompt != nil {
 			provReq.NegPrompt = *t.NegPrompt
 		}
 		if acc.BaseURL != nil {
 			provReq.BaseURL = *acc.BaseURL
-		} else if accountRequiresCodexRoute(t, params) && isCodexOAuthAccount(acc) {
+		} else if accountRequiresCodexRouteForRoute(t, route, params) && isCodexOAuthAccount(acc) {
 			provReq.BaseURL = "https://chatgpt.com/backend-api/codex"
 		}
 		if proxyURL, perr := s.resolveProxyURL(ctx, acc); perr == nil {
@@ -267,7 +278,7 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 				}
 				releaseAcc(acc)
 				acc = nil
-				if attempt == maxAttempts || !retryableProviderError(derr) {
+				if attempt == attemptLimit || !retryableProviderError(derr) {
 					s.failTask(ctx, t, fmt.Sprintf("provider call: %v", derr))
 					return
 				}
@@ -295,11 +306,11 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 		}
 		releaseAcc(acc)
 		acc = nil
-		if attempt == maxAttempts || !retryableProviderError(err) {
+		if attempt == attemptLimit || !retryableProviderError(err) {
 			s.failTask(ctx, t, fmt.Sprintf("provider call: %v", err))
 			return
 		}
-		log.Warn("provider retrying with next account", zap.Int("attempt", attempt), zap.Uint64("account_id", picked.ID), zap.Error(err))
+		log.Warn("provider retrying with next route/account", zap.Int("attempt", attempt), zap.String("provider", route.Provider), zap.String("upstream_model", route.UpstreamModel), zap.Uint64("account_id", picked.ID), zap.Error(err))
 		sleepBeforeRetry(ctx, retryDelay, attempt)
 	}
 	if res == nil {
@@ -358,6 +369,10 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 }
 
 func (s *GenerationService) makeUpstreamLogger(t *model.GenerationTask, acc *model.Account) provider.UpstreamLogger {
+	return s.makeUpstreamLoggerForProvider(t, acc, "")
+}
+
+func (s *GenerationService) makeUpstreamLoggerForProvider(t *model.GenerationTask, acc *model.Account, fallbackProvider string) provider.UpstreamLogger {
 	return func(ctx context.Context, e provider.UpstreamLogEntry) {
 		if t == nil {
 			return
@@ -378,7 +393,11 @@ func (s *GenerationService) makeUpstreamLogger(t *model.GenerationTask, acc *mod
 			DurationMs: e.DurationMs,
 		}
 		if row.Provider == "" {
-			row.Provider = t.Provider
+			if fallbackProvider != "" {
+				row.Provider = fallbackProvider
+			} else {
+				row.Provider = t.Provider
+			}
 		}
 		if acc != nil {
 			row.AccountID = &acc.ID
@@ -430,13 +449,20 @@ func (s *GenerationService) pickAccountForTask(ctx context.Context, t *model.Gen
 		return nil, errcode.NoAvailableAcc
 	}
 	route := providerRouteFromParams(params, t.Provider, t.ModelCode)
+	return s.pickAccountForRoute(ctx, t, route, params)
+}
+
+func (s *GenerationService) pickAccountForRoute(ctx context.Context, t *model.GenerationTask, route ProviderRoute, params map[string]any) (*model.Account, error) {
+	if t == nil {
+		return nil, errcode.NoAvailableAcc
+	}
 	predicate := func(acc *model.Account) bool {
 		return matchesRouteAuthType(acc, route.AuthType) && accountAllowsRouteModel(acc, t.ModelCode, route.UpstreamModel)
 	}
 	if route.Provider != model.ProviderGPT || t.Kind != string(provider.KindImage) || !strings.EqualFold(t.ModelCode, "gpt-image-2") {
 		return s.pool.ReserveWhere(ctx, route.Provider, route.Strategy, predicate)
 	}
-	if route.AuthType == "" && accountRequiresCodexRoute(t, params) {
+	if route.AuthType == "" && accountRequiresCodexRouteForRoute(t, route, params) {
 		return s.pool.ReserveWhere(ctx, route.Provider, route.Strategy, func(acc *model.Account) bool {
 			return predicate(acc) && isCodexOAuthAccount(acc)
 		})
@@ -455,7 +481,18 @@ func (s *GenerationService) pickAccountForTask(ctx context.Context, t *model.Gen
 }
 
 func accountRequiresCodexRoute(t *model.GenerationTask, params map[string]any) bool {
-	if t == nil || t.Provider != model.ProviderGPT || t.Kind != string(provider.KindImage) || !strings.EqualFold(t.ModelCode, "gpt-image-2") {
+	route := providerRouteFromParams(params, "", "")
+	return accountRequiresCodexRouteForRoute(t, route, params)
+}
+
+func accountRequiresCodexRouteForRoute(t *model.GenerationTask, route ProviderRoute, params map[string]any) bool {
+	if t == nil || t.Kind != string(provider.KindImage) || !strings.EqualFold(t.ModelCode, "gpt-image-2") {
+		return false
+	}
+	if strings.TrimSpace(route.Provider) == "" {
+		route.Provider = t.Provider
+	}
+	if route.Provider != model.ProviderGPT {
 		return false
 	}
 	return !shouldUseGPTWebRoute(params)
@@ -478,10 +515,13 @@ func (s *GenerationService) applyProviderRoute(ctx context.Context, kind provide
 	if params == nil {
 		params = map[string]any{}
 	}
-	route := ProviderRoute{Provider: fallbackProvider, UpstreamModel: modelCode, Strategy: "round_robin"}
+	routes := []ProviderRoute{{Provider: fallbackProvider, UpstreamModel: modelCode, Strategy: "round_robin"}}
 	if s.routeSvc != nil {
-		route = s.routeSvc.Resolve(ctx, kind, modelCode, fallbackProvider)
+		if resolved, _ := s.routeSvc.ResolveCandidates(ctx, kind, modelCode, fallbackProvider); len(resolved) > 0 {
+			routes = resolved
+		}
 	}
+	route := routes[0]
 	if route.Provider != "" {
 		params[routeParamProvider] = route.Provider
 	}
@@ -494,6 +534,7 @@ func (s *GenerationService) applyProviderRoute(ctx context.Context, kind provide
 	if route.AuthType != "" {
 		params[routeParamAuthType] = route.AuthType
 	}
+	params[routeParamCandidates] = routes
 	return params
 }
 
@@ -504,6 +545,73 @@ func providerRouteFromParams(params map[string]any, fallbackProvider, modelCode 
 		Strategy:      normalizeRouteStrategy(routeParamString(params, routeParamStrategy, "round_robin")),
 		AuthType:      routeParamString(params, routeParamAuthType, ""),
 	}
+}
+
+func providerRoutesFromParams(params map[string]any, fallbackProvider, modelCode string) []ProviderRoute {
+	if params != nil {
+		if raw, ok := params[routeParamCandidates]; ok {
+			if routes := decodeProviderRouteCandidates(raw, modelCode); len(routes) > 0 {
+				return routes
+			}
+		}
+	}
+	return []ProviderRoute{providerRouteFromParams(params, fallbackProvider, modelCode)}
+}
+
+func decodeProviderRouteCandidates(raw any, modelCode string) []ProviderRoute {
+	var routes []ProviderRoute
+	appendRoute := func(route ProviderRoute) {
+		routes = appendProviderRouteCandidate(routes, route.withDefaults(modelCode))
+	}
+	switch v := raw.(type) {
+	case []ProviderRoute:
+		for _, route := range v {
+			appendRoute(route)
+		}
+	case []any:
+		for _, item := range v {
+			switch x := item.(type) {
+			case map[string]any:
+				appendRoute(providerRouteFromCandidateMap(x))
+			case map[string]string:
+				appendRoute(ProviderRoute{
+					Provider:      x["provider"],
+					UpstreamModel: x["upstream_model"],
+					AuthType:      x["auth_type"],
+					Strategy:      x["strategy"],
+				})
+			}
+		}
+	case string:
+		var decoded []ProviderRoute
+		if err := json.Unmarshal([]byte(v), &decoded); err == nil {
+			for _, route := range decoded {
+				appendRoute(route)
+			}
+		}
+	}
+	return routes
+}
+
+func providerRouteFromCandidateMap(m map[string]any) ProviderRoute {
+	return ProviderRoute{
+		Provider:      strFromMap(m, "provider"),
+		UpstreamModel: strFromMap(m, "upstream_model"),
+		AuthType:      strFromMap(m, "auth_type"),
+		Strategy:      strFromMap(m, "strategy"),
+	}
+}
+
+func strFromMap(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
 }
 
 func routeParamString(params map[string]any, key, fallback string) string {
@@ -519,6 +627,18 @@ func routeParamString(params map[string]any, key, fallback string) string {
 		}
 	}
 	return strings.TrimSpace(fallback)
+}
+
+func shouldUseExtendedGPTImageTimeout(t *model.GenerationTask, params map[string]any, routes []ProviderRoute) bool {
+	if t == nil || t.Kind != string(provider.KindImage) || !strings.EqualFold(t.ModelCode, "gpt-image-2") || !shouldUseGPTWebRoute(params) {
+		return false
+	}
+	for _, route := range routes {
+		if route.Provider == model.ProviderGPT {
+			return true
+		}
+	}
+	return false
 }
 
 func isCodexOAuthAccount(acc *model.Account) bool {

@@ -34,10 +34,10 @@ type ProviderRouteOption struct {
 }
 
 type ProviderRoute struct {
-	Provider      string
-	UpstreamModel string
-	AuthType      string
-	Strategy      string
+	Provider      string `json:"provider"`
+	UpstreamModel string `json:"upstream_model"`
+	AuthType      string `json:"auth_type,omitempty"`
+	Strategy      string `json:"strategy"`
 }
 
 type ProviderRouteTrace struct {
@@ -45,6 +45,7 @@ type ProviderRouteTrace struct {
 	MatchedKind      string
 	MatchedModelCode string
 	FallbackReason   string
+	CandidateCount   int
 }
 
 // ProviderRouteService resolves public model routes from system_config.
@@ -62,6 +63,14 @@ func (s *ProviderRouteService) Resolve(ctx context.Context, kind provider.Kind, 
 }
 
 func (s *ProviderRouteService) ResolveExplain(ctx context.Context, kind provider.Kind, modelCode, fallbackProvider string) (ProviderRoute, ProviderRouteTrace) {
+	routes, trace := s.ResolveCandidates(ctx, kind, modelCode, fallbackProvider)
+	if len(routes) == 0 {
+		return ProviderRoute{Provider: strings.TrimSpace(fallbackProvider), Strategy: "round_robin"}.withDefaults(modelCode), trace
+	}
+	return routes[0], trace
+}
+
+func (s *ProviderRouteService) ResolveCandidates(ctx context.Context, kind provider.Kind, modelCode, fallbackProvider string) ([]ProviderRoute, ProviderRouteTrace) {
 	route := ProviderRoute{
 		Provider: strings.TrimSpace(fallbackProvider),
 		Strategy: "round_robin",
@@ -69,46 +78,58 @@ func (s *ProviderRouteService) ResolveExplain(ctx context.Context, kind provider
 	trace := ProviderRouteTrace{}
 	if s == nil || s.cfg == nil {
 		trace.FallbackReason = "provider.routes 服务未初始化"
-		return route.withDefaults(modelCode), trace
+		return []ProviderRoute{route.withDefaults(modelCode)}, trace
 	}
 	raw := s.cfg.GetString(ctx, SettingProviderRoutes, "")
 	if strings.TrimSpace(raw) == "" {
 		trace.FallbackReason = "provider.routes 未配置"
-		return route.withDefaults(modelCode), trace
+		return []ProviderRoute{route.withDefaults(modelCode)}, trace
 	}
 	var rules []ProviderRouteRule
 	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
 		trace.FallbackReason = "provider.routes 解析失败"
-		return route.withDefaults(modelCode), trace
+		return []ProviderRoute{route.withDefaults(modelCode)}, trace
 	}
 	rule, ok := findProviderRouteRule(rules, string(kind), modelCode)
 	if !ok {
 		trace.FallbackReason = "没有匹配的模型路由规则"
-		return route.withDefaults(modelCode), trace
+		return []ProviderRoute{route.withDefaults(modelCode)}, trace
 	}
 	trace.MatchedKind = strings.TrimSpace(rule.Kind)
 	trace.MatchedModelCode = strings.TrimSpace(rule.ModelCode)
 	strategy := normalizeRouteStrategy(rule.Strategy)
-	option, ok := pickProviderRouteOption(rule.Routes)
-	if !ok {
+	options := pickProviderRouteOptions(rule.Routes)
+	if len(options) == 0 {
 		trace.FallbackReason = "匹配规则没有启用上游路线"
-		return route.withDefaults(modelCode), trace
+		return []ProviderRoute{route.withDefaults(modelCode)}, trace
 	}
-	if option.Provider != "" {
-		route.Provider = strings.TrimSpace(option.Provider)
+	routes := make([]ProviderRoute, 0, len(options))
+	for _, option := range options {
+		candidate := ProviderRoute{
+			Provider: strings.TrimSpace(fallbackProvider),
+			Strategy: strategy,
+		}
+		if option.Provider != "" {
+			candidate.Provider = strings.TrimSpace(option.Provider)
+		}
+		if option.UpstreamModel != "" {
+			candidate.UpstreamModel = strings.TrimSpace(option.UpstreamModel)
+		}
+		if option.AuthType != "" {
+			candidate.AuthType = strings.TrimSpace(option.AuthType)
+		}
+		if option.Strategy != "" {
+			candidate.Strategy = normalizeRouteStrategy(option.Strategy)
+		}
+		routes = appendProviderRouteCandidate(routes, candidate.withDefaults(modelCode))
 	}
-	if option.UpstreamModel != "" {
-		route.UpstreamModel = strings.TrimSpace(option.UpstreamModel)
+	if len(routes) == 0 {
+		trace.FallbackReason = "匹配规则没有可用上游路线"
+		return []ProviderRoute{route.withDefaults(modelCode)}, trace
 	}
-	if option.AuthType != "" {
-		route.AuthType = strings.TrimSpace(option.AuthType)
-	}
-	if option.Strategy != "" {
-		strategy = normalizeRouteStrategy(option.Strategy)
-	}
-	route.Strategy = strategy
 	trace.MatchedConfig = true
-	return route.withDefaults(modelCode), trace
+	trace.CandidateCount = len(routes)
+	return routes, trace
 }
 
 func (r ProviderRoute) withDefaults(modelCode string) ProviderRoute {
@@ -174,6 +195,14 @@ func routeKindScore(ruleKind, requested string) int {
 }
 
 func pickProviderRouteOption(options []ProviderRouteOption) (ProviderRouteOption, bool) {
+	filtered := pickProviderRouteOptions(options)
+	if len(filtered) == 0 {
+		return ProviderRouteOption{}, false
+	}
+	return filtered[0], true
+}
+
+func pickProviderRouteOptions(options []ProviderRouteOption) []ProviderRouteOption {
 	filtered := make([]ProviderRouteOption, 0, len(options))
 	for _, option := range options {
 		if option.Enabled != nil && !*option.Enabled {
@@ -185,7 +214,7 @@ func pickProviderRouteOption(options []ProviderRouteOption) (ProviderRouteOption
 		filtered = append(filtered, option)
 	}
 	if len(filtered) == 0 {
-		return ProviderRouteOption{}, false
+		return nil
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
 		if filtered[i].Priority == filtered[j].Priority {
@@ -193,7 +222,22 @@ func pickProviderRouteOption(options []ProviderRouteOption) (ProviderRouteOption
 		}
 		return filtered[i].Priority < filtered[j].Priority
 	})
-	return filtered[0], true
+	return filtered
+}
+
+func appendProviderRouteCandidate(routes []ProviderRoute, route ProviderRoute) []ProviderRoute {
+	if strings.TrimSpace(route.Provider) == "" {
+		return routes
+	}
+	for _, existing := range routes {
+		if strings.EqualFold(existing.Provider, route.Provider) &&
+			strings.EqualFold(existing.UpstreamModel, route.UpstreamModel) &&
+			strings.EqualFold(existing.AuthType, route.AuthType) &&
+			strings.EqualFold(existing.Strategy, route.Strategy) {
+			return routes
+		}
+	}
+	return append(routes, route)
 }
 
 func normalizeRouteStrategy(v string) string {

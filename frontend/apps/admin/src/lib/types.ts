@@ -591,6 +591,18 @@ export interface ProviderRouteTestResp {
   candidate_accounts: number;
   available_accounts: number;
   warning?: string;
+  candidates?: ProviderRouteCandidateResp[];
+}
+
+export interface ProviderRouteCandidateResp {
+  index: number;
+  provider: string;
+  upstream_model: string;
+  auth_type?: string;
+  strategy: string;
+  candidate_accounts: number;
+  available_accounts: number;
+  warning?: string;
 }
 
 /** 已知 key（前端只列展示需要的，未列的也允许保存） */
