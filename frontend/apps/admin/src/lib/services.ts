@@ -35,6 +35,7 @@ import type {
   DashboardOverviewResp,
   PageData,
   PoolStatsResp,
+  ProviderHealthSummaryResp,
   ProviderRouteTestReq,
   ProviderRouteTestResp,
   ProxyCreateBody,
@@ -90,11 +91,24 @@ export interface GenerationLogListQuery {
   page_size?: number;
 }
 
+export interface UpstreamFailureListQuery {
+  keyword?: string;
+  provider?: 'gpt' | 'grok' | '';
+  account_id?: number;
+  stage?: string;
+  status_code?: number;
+  since_hours?: number;
+  page?: number;
+  page_size?: number;
+}
+
 export const logsApi = {
   generations: (q: GenerationLogListQuery = {}) =>
     request<PageData<AdminGenerationLogItem>>({ url: '/logs/generations', method: 'GET', params: q }),
   generationUpstream: (taskId: string) =>
     request<AdminGenerationUpstreamLogItem[]>({ url: `/logs/generations/${taskId}/upstream`, method: 'GET' }),
+  upstreamFailures: (q: UpstreamFailureListQuery = {}) =>
+    request<PageData<AdminGenerationUpstreamLogItem>>({ url: '/logs/upstream-failures', method: 'GET', params: q }),
   purgeGenerations: (days: number) =>
     request<AdminGenerationLogPurgeResp>({ url: '/logs/generations', method: 'DELETE', data: { days } }),
 };
@@ -284,6 +298,11 @@ export const systemApi = {
 };
 
 export const providerRoutesApi = {
+  health: () =>
+    request<ProviderHealthSummaryResp>({
+      url: '/provider-routes/health',
+      method: 'GET',
+    }),
   test: (body: ProviderRouteTestReq) =>
     request<ProviderRouteTestResp>({
       url: '/provider-routes/test',

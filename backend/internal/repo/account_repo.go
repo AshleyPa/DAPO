@@ -16,6 +16,49 @@ type AccountRepo struct{ db *gorm.DB }
 // NewAccountRepo 构造。
 func NewAccountRepo(db *gorm.DB) *AccountRepo { return &AccountRepo{db: db} }
 
+type ProviderHealthRow struct {
+	Provider        string
+	Total           int64
+	Enabled         int64
+	Disabled        int64
+	Broken          int64
+	Banned          int64
+	Available       int64
+	CooldownActive  int64
+	TokenExpired    int64
+	LastTestOK      int64
+	LastTestFail    int64
+	LastTestUnknown int64
+	QuotaZero       int64
+	SuccessCount    int64
+	ErrorCount      int64
+}
+
+type ProviderHealthAuthRow struct {
+	Provider       string
+	AuthType       string
+	Total          int64
+	Available      int64
+	CooldownActive int64
+	LastTestOK     int64
+	LastTestFail   int64
+}
+
+type ProviderHealthErrorRow struct {
+	ID             uint64
+	Provider       string
+	Name           string
+	AuthType       string
+	Status         int8
+	ErrorCount     int
+	LastError      *string
+	LastTestError  *string
+	LastTestAt     *time.Time
+	CooldownUntil  *time.Time
+	AccessTokenExp *time.Time
+	UpdatedAt      time.Time
+}
+
 // Create 创建。
 func (r *AccountRepo) Create(ctx context.Context, a *model.Account) error {
 	return r.db.WithContext(ctx).Create(a).Error
@@ -162,6 +205,77 @@ func (r *AccountRepo) AvailableByProvider(ctx context.Context, provider string) 
 		Order("id ASC").
 		Find(&items).Error
 	return items, err
+}
+
+// ProviderHealthSummary returns read-only account pool health aggregates.
+func (r *AccountRepo) ProviderHealthSummary(ctx context.Context) ([]*ProviderHealthRow, error) {
+	var rows []*ProviderHealthRow
+	sql := `SELECT
+  provider,
+  COUNT(1) AS total,
+  COALESCE(SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END), 0) AS enabled,
+  COALESCE(SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END), 0) AS disabled,
+  COALESCE(SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END), 0) AS broken,
+  COALESCE(SUM(CASE WHEN status = -1 THEN 1 ELSE 0 END), 0) AS banned,
+  COALESCE(SUM(CASE WHEN
+    (status = 1 OR (status = 2 AND cooldown_until IS NOT NULL AND cooldown_until <= UTC_TIMESTAMP()))
+    AND (cooldown_until IS NULL OR cooldown_until <= UTC_TIMESTAMP())
+    AND (access_token_expires_at IS NULL OR access_token_expires_at > UTC_TIMESTAMP())
+  THEN 1 ELSE 0 END), 0) AS available,
+  COALESCE(SUM(CASE WHEN cooldown_until IS NOT NULL AND cooldown_until > UTC_TIMESTAMP() THEN 1 ELSE 0 END), 0) AS cooldown_active,
+  COALESCE(SUM(CASE WHEN access_token_expires_at IS NOT NULL AND access_token_expires_at <= UTC_TIMESTAMP() THEN 1 ELSE 0 END), 0) AS token_expired,
+  COALESCE(SUM(CASE WHEN last_test_status = 1 THEN 1 ELSE 0 END), 0) AS last_test_ok,
+  COALESCE(SUM(CASE WHEN last_test_status = 2 THEN 1 ELSE 0 END), 0) AS last_test_fail,
+  COALESCE(SUM(CASE WHEN last_test_status = 0 THEN 1 ELSE 0 END), 0) AS last_test_unknown,
+  COALESCE(SUM(CASE
+    WHEN JSON_EXTRACT(oauth_meta, '$.image_quota_remaining') IS NOT NULL
+      AND CAST(JSON_UNQUOTE(JSON_EXTRACT(oauth_meta, '$.image_quota_remaining')) AS SIGNED) <= 0
+    THEN 1 ELSE 0 END), 0) AS quota_zero,
+  COALESCE(SUM(success_count), 0) AS success_count,
+  COALESCE(SUM(error_count), 0) AS error_count
+FROM account
+WHERE deleted_at IS NULL
+GROUP BY provider
+ORDER BY provider ASC`
+	return rows, r.db.WithContext(ctx).Raw(sql).Scan(&rows).Error
+}
+
+// ProviderHealthAuthBreakdown returns read-only health aggregates by provider/auth_type.
+func (r *AccountRepo) ProviderHealthAuthBreakdown(ctx context.Context) ([]*ProviderHealthAuthRow, error) {
+	var rows []*ProviderHealthAuthRow
+	sql := `SELECT
+  provider,
+  auth_type,
+  COUNT(1) AS total,
+  COALESCE(SUM(CASE WHEN
+    (status = 1 OR (status = 2 AND cooldown_until IS NOT NULL AND cooldown_until <= UTC_TIMESTAMP()))
+    AND (cooldown_until IS NULL OR cooldown_until <= UTC_TIMESTAMP())
+    AND (access_token_expires_at IS NULL OR access_token_expires_at > UTC_TIMESTAMP())
+  THEN 1 ELSE 0 END), 0) AS available,
+  COALESCE(SUM(CASE WHEN cooldown_until IS NOT NULL AND cooldown_until > UTC_TIMESTAMP() THEN 1 ELSE 0 END), 0) AS cooldown_active,
+  COALESCE(SUM(CASE WHEN last_test_status = 1 THEN 1 ELSE 0 END), 0) AS last_test_ok,
+  COALESCE(SUM(CASE WHEN last_test_status = 2 THEN 1 ELSE 0 END), 0) AS last_test_fail
+FROM account
+WHERE deleted_at IS NULL
+GROUP BY provider, auth_type
+ORDER BY provider ASC, auth_type ASC`
+	return rows, r.db.WithContext(ctx).Raw(sql).Scan(&rows).Error
+}
+
+// ProviderHealthErrorSamples returns recent account-level error samples for diagnostics.
+func (r *AccountRepo) ProviderHealthErrorSamples(ctx context.Context, limit int) ([]*ProviderHealthErrorRow, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	var rows []*ProviderHealthErrorRow
+	err := r.db.WithContext(ctx).Table("account").
+		Select(`id, provider, name, auth_type, status, error_count, last_error, last_test_error, last_test_at, cooldown_until, access_token_expires_at AS access_token_exp, updated_at`).
+		Where("deleted_at IS NULL").
+		Where("(last_error IS NOT NULL OR last_test_error IS NOT NULL OR status = ? OR last_test_status = ? OR error_count > 0)", model.AccountStatusBroken, model.AccountTestFail).
+		Order("updated_at DESC, id DESC").
+		Limit(limit).
+		Scan(&rows).Error
+	return rows, err
 }
 
 // MarkUsed 标记调度成功。

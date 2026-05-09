@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   Eye,
@@ -20,6 +21,7 @@ import type { AdminGenerationLogItem, AdminGenerationUpstreamLogItem } from '../
 import { toast } from '../../stores/toast';
 
 const pageSize = 20;
+const failurePageSize = 10;
 
 function statusInfo(s: number): { label: string; cls: string } {
   switch (s) {
@@ -117,6 +119,9 @@ export default function LogsPage() {
   const [confirmPurge, setConfirmPurge] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [upstreamTask, setUpstreamTask] = useState<AdminGenerationLogItem | null>(null);
+  const [failureProvider, setFailureProvider] = useState<'all' | 'gpt' | 'grok'>('all');
+  const [failureHours, setFailureHours] = useState<'24' | '168' | '720'>('168');
+  const [failurePage, setFailurePage] = useState(1);
 
   const query = useMemo(
     () => ({
@@ -132,6 +137,21 @@ export default function LogsPage() {
   const list = useQuery({
     queryKey: ['admin', 'logs', 'generations', query],
     queryFn: () => logsApi.generations(query),
+  });
+
+  const failuresQuery = useMemo(
+    () => ({
+      provider: failureProvider === 'all' ? undefined : failureProvider,
+      since_hours: Number(failureHours),
+      page: failurePage,
+      page_size: failurePageSize,
+    }),
+    [failureProvider, failureHours, failurePage],
+  );
+
+  const failures = useQuery({
+    queryKey: ['admin', 'logs', 'upstream-failures', failuresQuery],
+    queryFn: () => logsApi.upstreamFailures(failuresQuery),
   });
 
   const items = list.data?.list ?? [];
@@ -227,6 +247,27 @@ export default function LogsPage() {
           <option value="4">已退款</option>
         </select>
       </div>
+
+      <UpstreamFailurePanel
+        rows={failures.data?.list ?? []}
+        total={failures.data?.total ?? 0}
+        page={failurePage}
+        loading={failures.isLoading}
+        fetching={failures.isFetching}
+        provider={failureProvider}
+        hours={failureHours}
+        onProviderChange={(next) => {
+          setFailureProvider(next);
+          setFailurePage(1);
+        }}
+        onHoursChange={(next) => {
+          setFailureHours(next);
+          setFailurePage(1);
+        }}
+        onRefresh={() => failures.refetch()}
+        onPrev={() => setFailurePage((p) => Math.max(1, p - 1))}
+        onNext={() => setFailurePage((p) => p + 1)}
+      />
 
       <div className="card table-wrap overflow-hidden">
         <table className="data-table table-fixed text-small">
@@ -335,6 +376,112 @@ export default function LogsPage() {
         />
       )}
     </div>
+  );
+}
+
+function UpstreamFailurePanel({
+  rows,
+  total,
+  page,
+  loading,
+  fetching,
+  provider,
+  hours,
+  onProviderChange,
+  onHoursChange,
+  onRefresh,
+  onPrev,
+  onNext,
+}: {
+  rows: AdminGenerationUpstreamLogItem[];
+  total: number;
+  page: number;
+  loading: boolean;
+  fetching: boolean;
+  provider: 'all' | 'gpt' | 'grok';
+  hours: '24' | '168' | '720';
+  onProviderChange: (next: 'all' | 'gpt' | 'grok') => void;
+  onHoursChange: (next: '24' | '168' | '720') => void;
+  onRefresh: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  const lastPage = Math.max(1, Math.ceil(total / failurePageSize));
+  return (
+    <section className="card card-section space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-h5 font-semibold text-text-primary">
+            <AlertTriangle size={18} className="text-warning" /> 上游失败审计
+          </h2>
+          <p className="mt-0.5 text-small text-text-tertiary">聚合最近失败的 provider 请求，辅助定位账号池、路由和上游异常。</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <select className="input h-9 w-[116px]" value={provider} onChange={(e) => onProviderChange(e.target.value as 'all' | 'gpt' | 'grok')}>
+            <option value="all">全部池</option>
+            <option value="gpt">GPT</option>
+            <option value="grok">Grok</option>
+          </select>
+          <select className="input h-9 w-[128px]" value={hours} onChange={(e) => onHoursChange(e.target.value as '24' | '168' | '720')}>
+            <option value="24">最近 24 小时</option>
+            <option value="168">最近 7 天</option>
+            <option value="720">最近 30 天</option>
+          </select>
+          <button className="btn btn-outline btn-sm" onClick={onRefresh} disabled={fetching}>
+            <RefreshCw size={14} className={fetching ? 'animate-spin' : ''} /> 刷新
+          </button>
+        </div>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-border">
+        <table className="data-table table-fixed text-small">
+          <thead>
+            <tr>
+              <th className="w-[150px]">时间</th>
+              <th className="w-[88px]">Provider</th>
+              <th className="w-[110px]">账号</th>
+              <th className="w-[150px]">阶段</th>
+              <th className="w-[120px]">模型</th>
+              <th>错误摘要</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr><td colSpan={6} className="py-8 text-center text-text-tertiary">加载中...</td></tr>
+            )}
+            {!loading && rows.length === 0 && (
+              <tr><td colSpan={6} className="py-8 text-center text-text-tertiary">所选范围内暂无上游失败</td></tr>
+            )}
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td className="whitespace-nowrap">{fmtTime(row.created_at)}</td>
+                <td><span className="badge badge-outline uppercase">{row.provider}</span></td>
+                <td>{row.account_id ? `#${row.account_id}` : '-'}</td>
+                <td>
+                  <div className="truncate" title={row.stage}>{row.stage}</div>
+                  {row.status_code > 0 && <div className="text-tiny text-text-tertiary">HTTP {row.status_code}</div>}
+                </td>
+                <td className="truncate" title={row.model_code || row.kind || '-'}>
+                  {row.model_code || row.kind || '-'}
+                </td>
+                <td>
+                  <div className="max-w-full truncate text-danger" title={row.error || row.response_excerpt || '-'}>
+                    {row.error || row.response_excerpt || '-'}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex items-center justify-between text-small text-text-tertiary">
+        <span>失败 {total} 条</span>
+        <div className="inline-flex items-center gap-2">
+          <button className="btn btn-outline btn-sm" disabled={page <= 1} onClick={onPrev}>上一页</button>
+          <span>{page} / {lastPage}</span>
+          <button className="btn btn-outline btn-sm" disabled={page >= lastPage} onClick={onNext}>下一页</button>
+        </div>
+      </div>
+    </section>
   );
 }
 

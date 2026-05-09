@@ -148,6 +148,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 		providerRoutes := authed.Group("/provider-routes")
 		providerRoutes.Use(superOnly)
 		{
+			providerRoutes.GET("/health", providerRouteH.Health)
 			providerRoutes.POST("/test", providerRouteH.Test)
 		}
 
@@ -183,6 +184,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 		logs := authed.Group("/logs")
 		{
 			logs.GET("/generations", logH.GenerationLogs)
+			logs.GET("/upstream-failures", logH.UpstreamFailures)
 			logs.GET("/generations/:task_id/preview", logH.GenerationPreview)
 			logs.GET("/generations/:task_id/upstream", logH.GenerationUpstreamLogs)
 			logs.DELETE("/generations", logH.PurgeGenerationLogs)

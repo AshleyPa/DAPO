@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Cloud, CreditCard, Database, GitBranch, RefreshCw, Save, ShieldAlert, Trash2 } from 'lucide-react';
+import { AlertTriangle, Cloud, CreditCard, Database, GitBranch, RefreshCw, Save, ShieldAlert, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { ApiError } from '../../lib/api';
 import { providerRoutesApi, proxiesApi, systemApi } from '../../lib/services';
-import type { ProviderRouteRule, ProviderRouteTestReq, ProviderRouteTestResp, ProxyItem, SystemSettings } from '../../lib/types';
+import type { ProviderHealthProviderItem, ProviderRouteRule, ProviderRouteTestReq, ProviderRouteTestResp, ProxyItem, SystemSettings } from '../../lib/types';
 import { toast } from '../../stores/toast';
 import ProviderRoutesEditor, { defaultProviderRoutes, normalizeProviderRoutes, providerRoutesValue } from './ProviderRoutesEditor';
 
@@ -174,6 +174,10 @@ export default function ConfigPage() {
     queryKey: ['admin', 'proxies', 'options'],
     queryFn: () => proxiesApi.list({ page: 1, page_size: 200, status: 1 }),
   });
+  const providerHealth = useQuery({
+    queryKey: ['admin', 'provider-routes', 'health'],
+    queryFn: () => providerRoutesApi.health(),
+  });
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [dirty, setDirty] = useState(false);
   const [routeTest, setRouteTest] = useState<ProviderRouteTestReq>(DEFAULT_ROUTE_TEST);
@@ -258,6 +262,13 @@ export default function ConfigPage() {
               loading={testRoute.isPending}
               onChange={setRouteTest}
               onSubmit={() => testRoute.mutate()}
+            />
+            <ProviderHealthPanel
+              providers={providerHealth.data?.providers ?? []}
+              loading={providerHealth.isLoading}
+              fetching={providerHealth.isFetching}
+              refreshedAt={providerHealth.data?.refreshed_at}
+              onRefresh={() => providerHealth.refetch()}
             />
           </Section>
 
@@ -487,6 +498,97 @@ function ProviderRouteDryRunPanel({
   );
 }
 
+function ProviderHealthPanel({
+  providers,
+  loading,
+  fetching,
+  refreshedAt,
+  onRefresh,
+}: {
+  providers: ProviderHealthProviderItem[];
+  loading: boolean;
+  fetching: boolean;
+  refreshedAt?: number;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-surface-2 p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-small font-semibold text-text-primary">Provider 健康</div>
+          <div className="text-small text-text-tertiary">
+            只读汇总账号池状态，不会请求上游。{refreshedAt ? `刷新于 ${formatUnix(refreshedAt)}` : ''}
+          </div>
+        </div>
+        <button type="button" className="btn btn-outline btn-sm" disabled={fetching} onClick={onRefresh}>
+          <RefreshCw size={14} className={fetching ? 'animate-spin' : ''} /> 刷新健康
+        </button>
+      </div>
+      {loading ? (
+        <div className="rounded-md border border-border bg-surface p-4 text-center text-small text-text-tertiary">加载中...</div>
+      ) : providers.length === 0 ? (
+        <div className="rounded-md border border-border bg-surface p-4 text-center text-small text-text-tertiary">暂无账号池数据</div>
+      ) : (
+        <div className="grid gap-3">
+          {providers.map((p) => {
+            const risk = p.cooldown_active + p.token_expired + p.last_test_fail + p.quota_zero;
+            return (
+              <section key={p.provider} className="rounded-md border border-border bg-surface p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-small font-semibold uppercase text-text-primary">{p.provider}</span>
+                      {risk > 0 && <span className="badge badge-warning"><AlertTriangle size={12} /> {risk} 项风险</span>}
+                    </div>
+                    <div className="mt-1 text-tiny text-text-tertiary">成功 {p.success_count} · 失败计数 {p.error_count}</div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-small sm:grid-cols-4">
+                    <HealthStat label="可用/总数" value={`${p.available}/${p.total}`} />
+                    <HealthStat label="熔断/冷却" value={`${p.broken}/${p.cooldown_active}`} />
+                    <HealthStat label="测试失败" value={String(p.last_test_fail)} />
+                    <HealthStat label="额度归零" value={String(p.quota_zero)} />
+                  </div>
+                </div>
+                {p.auth_types.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {p.auth_types.map((a) => (
+                      <span key={`${p.provider}-${a.auth_type}`} className="rounded-md border border-border bg-surface-2 px-2 py-1 text-tiny text-text-secondary">
+                        {a.auth_type || '未标注'} · 可用 {a.available}/{a.total} · 测试失败 {a.last_test_fail}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {p.recent_errors.length > 0 && (
+                  <div className="mt-3 grid gap-2">
+                    {p.recent_errors.map((e) => (
+                      <div key={`${p.provider}-${e.account_id}`} className="rounded-md border border-warning/30 bg-warning/5 p-2 text-tiny">
+                        <div className="flex flex-wrap justify-between gap-2 text-text-secondary">
+                          <span>#{e.account_id} {e.name} · {e.auth_type} · 状态 {e.status}</span>
+                          <span>{formatUnix(e.updated_at)}</span>
+                        </div>
+                        <div className="mt-1 line-clamp-2 break-words text-warning">{e.last_error || e.last_test_error || `失败计数 ${e.error_count}`}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HealthStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-[86px] rounded-md border border-border bg-surface-2 px-2 py-1.5">
+      <div className="text-tiny text-text-tertiary">{label}</div>
+      <div className="mt-0.5 font-semibold text-text-primary">{value}</div>
+    </div>
+  );
+}
+
 function RouteResultStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-border bg-surface p-3">
@@ -494,6 +596,11 @@ function RouteResultStat({ label, value }: { label: string; value: string }) {
       <div className="mt-1 break-words text-small font-semibold text-text-primary">{value}</div>
     </div>
   );
+}
+
+function formatUnix(value?: number) {
+  if (!value) return '-';
+  return new Date(value * 1000).toLocaleString();
 }
 
 function formatBytes(bytes: number) {

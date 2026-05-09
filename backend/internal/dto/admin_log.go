@@ -33,11 +33,24 @@ type AdminGenerationLogPurgeResp struct {
 	Deleted int64 `json:"deleted"`
 }
 
+type AdminUpstreamFailureListReq struct {
+	Keyword    string  `form:"keyword" binding:"omitempty,max=128"`
+	Provider   string  `form:"provider" binding:"omitempty,oneof=gpt grok"`
+	AccountID  *uint64 `form:"account_id" binding:"omitempty,min=1"`
+	Stage      string  `form:"stage" binding:"omitempty,max=64"`
+	StatusCode *int    `form:"status_code" binding:"omitempty,min=0,max=599"`
+	SinceHours int     `form:"since_hours" binding:"omitempty,min=1,max=8760"`
+	Page       int     `form:"page" binding:"omitempty,min=1"`
+	PageSize   int     `form:"page_size" binding:"omitempty,min=1,max=200"`
+}
+
 type AdminGenerationUpstreamLogResp struct {
 	ID              uint64  `json:"id"`
 	TaskID          string  `json:"task_id"`
 	Provider        string  `json:"provider"`
 	AccountID       *uint64 `json:"account_id,omitempty"`
+	Kind            string  `json:"kind,omitempty"`
+	ModelCode       string  `json:"model_code,omitempty"`
 	Stage           string  `json:"stage"`
 	Method          string  `json:"method,omitempty"`
 	URL             string  `json:"url,omitempty"`

@@ -98,6 +98,40 @@ func (h *AdminLogHandler) GenerationUpstreamLogs(c *gin.Context) {
 		response.Fail(c, errcode.DBError.Wrap(err))
 		return
 	}
+	response.OK(c, upstreamLogRows(rows))
+}
+
+func (h *AdminLogHandler) UpstreamFailures(c *gin.Context) {
+	var req dto.AdminUpstreamFailureListReq
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.Fail(c, errcode.InvalidParam.Wrap(err))
+		return
+	}
+	rows, total, err := h.gen.ListUpstreamFailures(c.Request.Context(), repo.UpstreamFailureLogFilter{
+		Keyword:    req.Keyword,
+		Provider:   req.Provider,
+		AccountID:  req.AccountID,
+		Stage:      req.Stage,
+		StatusCode: req.StatusCode,
+		SinceHours: req.SinceHours,
+		Page:       req.Page,
+		PageSize:   req.PageSize,
+	})
+	if err != nil {
+		response.Fail(c, errcode.DBError.Wrap(err))
+		return
+	}
+	page, pageSize := req.Page, req.PageSize
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	response.Page(c, upstreamLogRows(rows), total, page, pageSize)
+}
+
+func upstreamLogRows(rows []*repo.AdminGenerationUpstreamLogRow) []*dto.AdminGenerationUpstreamLogResp {
 	out := make([]*dto.AdminGenerationUpstreamLogResp, 0, len(rows))
 	for _, r := range rows {
 		item := &dto.AdminGenerationUpstreamLogResp{
@@ -109,6 +143,12 @@ func (h *AdminLogHandler) GenerationUpstreamLogs(c *gin.Context) {
 			StatusCode: r.StatusCode,
 			DurationMs: r.DurationMs,
 			CreatedAt:  r.CreatedAt.Unix(),
+		}
+		if r.Kind != nil {
+			item.Kind = *r.Kind
+		}
+		if r.ModelCode != nil {
+			item.ModelCode = *r.ModelCode
 		}
 		if r.Method != nil {
 			item.Method = *r.Method
@@ -130,7 +170,7 @@ func (h *AdminLogHandler) GenerationUpstreamLogs(c *gin.Context) {
 		}
 		out = append(out, item)
 	}
-	response.OK(c, out)
+	return out
 }
 
 // GenerationPreview proxies a request-log preview through the admin origin.

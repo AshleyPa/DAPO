@@ -46,6 +46,8 @@ type AdminGenerationUpstreamLogRow struct {
 	TaskID          string
 	Provider        string
 	AccountID       *uint64
+	Kind            *string
+	ModelCode       *string
 	Stage           string
 	Method          *string
 	URL             *string
@@ -56,6 +58,17 @@ type AdminGenerationUpstreamLogRow struct {
 	Error           *string
 	Meta            *string
 	CreatedAt       time.Time
+}
+
+type UpstreamFailureLogFilter struct {
+	Provider   string
+	AccountID  *uint64
+	Stage      string
+	StatusCode *int
+	Keyword    string
+	SinceHours int
+	Page       int
+	PageSize   int
 }
 
 // NewGenerationRepo 构造。
@@ -74,7 +87,100 @@ func (r *GenerationRepo) ListUpstreamLogs(ctx context.Context, taskID string) ([
 		Where("task_id = ?", taskID).
 		Order("id ASC").
 		Find(&rows).Error
+	if isMissingGenerationUpstreamLogTable(err) {
+		return []*AdminGenerationUpstreamLogRow{}, nil
+	}
 	return rows, err
+}
+
+func (r *GenerationRepo) ListUpstreamFailures(ctx context.Context, f UpstreamFailureLogFilter) ([]*AdminGenerationUpstreamLogRow, int64, error) {
+	if f.Page <= 0 {
+		f.Page = 1
+	}
+	if f.PageSize <= 0 || f.PageSize > 200 {
+		f.PageSize = 20
+	}
+	if f.SinceHours <= 0 || f.SinceHours > 24*365 {
+		f.SinceHours = 24 * 7
+	}
+	where := []string{"(l.error IS NOT NULL OR l.status_code >= 400)", "l.created_at >= ?"}
+	args := []any{time.Now().UTC().Add(-time.Duration(f.SinceHours) * time.Hour)}
+	if f.Provider != "" {
+		where = append(where, "l.provider = ?")
+		args = append(args, f.Provider)
+	}
+	if f.AccountID != nil {
+		where = append(where, "l.account_id = ?")
+		args = append(args, *f.AccountID)
+	}
+	if f.Stage != "" {
+		where = append(where, "l.stage = ?")
+		args = append(args, f.Stage)
+	}
+	if f.StatusCode != nil {
+		where = append(where, "l.status_code = ?")
+		args = append(args, *f.StatusCode)
+	}
+	if kw := strings.TrimSpace(f.Keyword); kw != "" {
+		like := "%" + kw + "%"
+		where = append(where, "(l.task_id = ? OR l.stage LIKE ? OR l.url LIKE ? OR l.error LIKE ? OR l.response_excerpt LIKE ? OR t.model_code LIKE ?)")
+		args = append(args, kw, like, like, like, like, like)
+	}
+	whereSQL := strings.Join(where, " AND ")
+
+	countSQL := `SELECT COUNT(1)
+FROM generation_upstream_log l
+LEFT JOIN generation_task t ON t.task_id = l.task_id
+WHERE ` + whereSQL
+	var total int64
+	if err := r.db.WithContext(ctx).Raw(countSQL, args...).Scan(&total).Error; err != nil {
+		if isMissingGenerationUpstreamLogTable(err) {
+			return []*AdminGenerationUpstreamLogRow{}, 0, nil
+		}
+		return nil, 0, err
+	}
+
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, (f.Page-1)*f.PageSize, f.PageSize)
+	querySQL := `SELECT
+  l.id,
+  l.task_id,
+  l.provider,
+  l.account_id,
+  t.kind,
+  t.model_code,
+  l.stage,
+  l.method,
+  l.url,
+  l.status_code,
+  l.duration_ms,
+  l.request_excerpt,
+  l.response_excerpt,
+  l.error,
+  l.meta,
+  l.created_at
+FROM generation_upstream_log l
+LEFT JOIN generation_task t ON t.task_id = l.task_id
+WHERE ` + whereSQL + `
+ORDER BY l.id DESC
+LIMIT ?, ?`
+	var rows []*AdminGenerationUpstreamLogRow
+	if err := r.db.WithContext(ctx).Raw(querySQL, queryArgs...).Scan(&rows).Error; err != nil {
+		if isMissingGenerationUpstreamLogTable(err) {
+			return []*AdminGenerationUpstreamLogRow{}, 0, nil
+		}
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+func isMissingGenerationUpstreamLogTable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "generation_upstream_log") &&
+		(strings.Contains(msg, "doesn't exist") || strings.Contains(msg, "no such table"))
 }
 
 func (r *GenerationRepo) ListAdminLogs(ctx context.Context, f AdminGenerationLogFilter) ([]*AdminGenerationLogRow, int64, error) {

@@ -118,6 +118,8 @@ export interface AdminGenerationUpstreamLogItem {
   task_id: string;
   provider: string;
   account_id?: number;
+  kind?: string;
+  model_code?: string;
   stage: string;
   method?: string;
   url?: string;
@@ -128,6 +130,54 @@ export interface AdminGenerationUpstreamLogItem {
   error?: string;
   meta?: string;
   created_at: number;
+}
+
+export interface ProviderHealthAuthItem {
+  auth_type: string;
+  total: number;
+  available: number;
+  cooldown_active: number;
+  last_test_ok: number;
+  last_test_fail: number;
+}
+
+export interface ProviderHealthErrorItem {
+  account_id: number;
+  name: string;
+  auth_type: string;
+  status: number;
+  error_count: number;
+  last_error?: string;
+  last_test_error?: string;
+  last_test_at?: number;
+  cooldown_until?: number;
+  access_token_expires_at?: number;
+  updated_at: number;
+}
+
+export interface ProviderHealthProviderItem {
+  provider: string;
+  total: number;
+  enabled: number;
+  disabled: number;
+  broken: number;
+  banned: number;
+  available: number;
+  cooldown_active: number;
+  token_expired: number;
+  last_test_ok: number;
+  last_test_fail: number;
+  last_test_unknown: number;
+  quota_zero: number;
+  success_count: number;
+  error_count: number;
+  auth_types: ProviderHealthAuthItem[];
+  recent_errors: ProviderHealthErrorItem[];
+}
+
+export interface ProviderHealthSummaryResp {
+  refreshed_at: number;
+  providers: ProviderHealthProviderItem[];
 }
 
 export interface AdminWalletLogItem {

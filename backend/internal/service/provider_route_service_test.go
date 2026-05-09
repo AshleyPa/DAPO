@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/kleinai/backend/internal/model"
+	"github.com/kleinai/backend/internal/repo"
 )
 
 func TestProviderRouteKindTextMatchesChat(t *testing.T) {
@@ -188,5 +190,65 @@ func TestDefaultProviderRouteFallback(t *testing.T) {
 	}
 	if got := defaultProviderRouteFallback("chat", "grok-4.20-fast"); got != "grok" {
 		t.Fatalf("expected grok chat fallback, got %s", got)
+	}
+}
+
+func TestBuildProviderHealthSummaryGroupsAuthAndErrors(t *testing.T) {
+	now := time.Unix(1000, 0)
+	lastErr := "rate limited"
+	testErr := "token expired"
+	testAt := now.Add(-time.Minute)
+	cooldown := now.Add(time.Minute)
+	expireAt := now.Add(-time.Minute)
+	rows := []*repo.ProviderHealthRow{{
+		Provider:        "gpt",
+		Total:           3,
+		Enabled:         2,
+		Available:       1,
+		CooldownActive:  1,
+		TokenExpired:    1,
+		LastTestOK:      1,
+		LastTestFail:    1,
+		LastTestUnknown: 1,
+		QuotaZero:       1,
+		SuccessCount:    7,
+		ErrorCount:      2,
+	}}
+	authRows := []*repo.ProviderHealthAuthRow{{
+		Provider:       "gpt",
+		AuthType:       "oauth",
+		Total:          2,
+		Available:      1,
+		CooldownActive: 1,
+		LastTestOK:     1,
+		LastTestFail:   1,
+	}}
+	errorRows := []*repo.ProviderHealthErrorRow{{
+		ID:             42,
+		Provider:       "gpt",
+		Name:           "gpt-oauth",
+		AuthType:       "oauth",
+		Status:         model.AccountStatusBroken,
+		ErrorCount:     2,
+		LastError:      &lastErr,
+		LastTestError:  &testErr,
+		LastTestAt:     &testAt,
+		CooldownUntil:  &cooldown,
+		AccessTokenExp: &expireAt,
+		UpdatedAt:      now,
+	}}
+	got := buildProviderHealthSummary(now, rows, authRows, errorRows)
+	if got.RefreshedAt != now.Unix() || len(got.Providers) != 1 {
+		t.Fatalf("unexpected summary: %#v", got)
+	}
+	p := got.Providers[0]
+	if p.Provider != "gpt" || p.Available != 1 || p.TokenExpired != 1 || p.ErrorCount != 2 {
+		t.Fatalf("unexpected provider row: %#v", p)
+	}
+	if len(p.AuthTypes) != 1 || p.AuthTypes[0].AuthType != "oauth" || p.AuthTypes[0].CooldownActive != 1 {
+		t.Fatalf("unexpected auth breakdown: %#v", p.AuthTypes)
+	}
+	if len(p.RecentErrors) != 1 || p.RecentErrors[0].AccountID != 42 || p.RecentErrors[0].LastError != lastErr {
+		t.Fatalf("unexpected error samples: %#v", p.RecentErrors)
 	}
 }

@@ -18,6 +18,16 @@ func NewAdminProviderRouteHandler(svc *service.ProviderRouteTestService) *AdminP
 	return &AdminProviderRouteHandler{svc: svc}
 }
 
+// Health GET /admin/api/v1/provider-routes/health
+func (h *AdminProviderRouteHandler) Health(c *gin.Context) {
+	resp, err := h.svc.Health(c.Request.Context())
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, resp)
+}
+
 // Test POST /admin/api/v1/provider-routes/test
 func (h *AdminProviderRouteHandler) Test(c *gin.Context) {
 	var req dto.ProviderRouteTestReq
