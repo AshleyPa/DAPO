@@ -61,7 +61,7 @@ export default function LoginPage() {
           <div className="flex justify-center">
             <Logo size="lg" suffix="管理后台" />
           </div>
-          <p className="text-small text-text-secondary">仅授权 IP 可访问</p>
+          <p className="text-small text-text-secondary">管理入口，请使用授权管理员账号登录</p>
         </header>
 
         <div className="field">

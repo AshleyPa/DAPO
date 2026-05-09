@@ -51,11 +51,6 @@ services:
     volumes:
       - dapo-logs:/app/logs
       - dapo-storage:/app/storage
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:17180/healthz | grep -q ok || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
 
   admin:
     image: ${DAPO_BACKEND_IMAGE}
@@ -68,6 +63,7 @@ services:
       - "${KLEIN_ADMIN_PORT:-17188}:17188"
     volumes:
       - dapo-logs:/app/logs
+      - dapo-storage:/app/storage
 
   openai:
     image: ${DAPO_BACKEND_IMAGE}
@@ -80,6 +76,7 @@ services:
       - "${KLEIN_OPENAI_PORT:-17200}:17200"
     volumes:
       - dapo-logs:/app/logs
+      - dapo-storage:/app/storage
 
   worker:
     image: ${DAPO_BACKEND_IMAGE}

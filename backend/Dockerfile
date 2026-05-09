@@ -15,6 +15,9 @@ COPY . .
 ARG VERSION=dev
 ARG BUILD_TIME=unknown
 
+RUN mkdir -p /out/logs /out/storage && \
+    touch /out/logs/.keep /out/storage/.keep
+
 RUN go build -trimpath -ldflags="-s -w \
         -X github.com/kleinai/backend/pkg/version.Build=${VERSION} \
         -X github.com/kleinai/backend/pkg/version.Time=${BUILD_TIME}" \
@@ -41,10 +44,12 @@ COPY --from=builder /out/admin                          /app/admin
 COPY --from=builder /out/openai                         /app/openai
 COPY --from=builder /out/worker                         /app/worker
 COPY --from=builder /src/configs                        /app/configs
+COPY --from=builder --chown=65532:65532 /out/logs       /app/logs
+COPY --from=builder --chown=65532:65532 /out/storage    /app/storage
 
 ENV TZ=Asia/Shanghai
 USER 65532:65532
 
 EXPOSE 17180 17188 17200
 
-ENTRYPOINT ["/app/api"]
+CMD ["/app/api"]
