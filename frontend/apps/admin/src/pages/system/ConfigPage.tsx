@@ -35,6 +35,7 @@ interface FormState {
   payment_provider: string;
   payment_notify_url: string;
   alipay_app_id: string;
+  alipay_seller_id: string;
   alipay_private_key: string;
   alipay_public_key: string;
   alipay_gateway_url: string;
@@ -70,6 +71,7 @@ const DEFAULT_FORM: FormState = {
   payment_provider: 'alipay',
   payment_notify_url: '',
   alipay_app_id: '',
+  alipay_seller_id: '',
   alipay_private_key: '',
   alipay_public_key: '',
   alipay_gateway_url: '',
@@ -120,6 +122,7 @@ function fromSettings(s: SystemSettings | undefined): FormState {
     payment_provider: asStr(s['payment.provider'], 'alipay'),
     payment_notify_url: asStr(s['payment.notify_url']),
     alipay_app_id: asStr(s['payment.alipay_app_id']),
+    alipay_seller_id: asStr(s['payment.alipay_seller_id']),
     alipay_private_key: asStr(s['payment.alipay_private_key']),
     alipay_public_key: asStr(s['payment.alipay_public_key']),
     alipay_gateway_url: asStr(s['payment.alipay_gateway_url']),
@@ -157,6 +160,7 @@ function toPayload(f: FormState): Partial<SystemSettings> {
     'payment.provider': f.payment_provider.trim(),
     'payment.notify_url': f.payment_notify_url.trim(),
     'payment.alipay_app_id': f.alipay_app_id.trim(),
+    'payment.alipay_seller_id': f.alipay_seller_id.trim(),
     'payment.alipay_private_key': f.alipay_private_key.trim(),
     'payment.alipay_public_key': f.alipay_public_key.trim(),
     'payment.alipay_gateway_url': f.alipay_gateway_url.trim(),
@@ -378,6 +382,7 @@ export default function ConfigPage() {
               <TextField label="默认支付通道" value={form.payment_provider} onChange={(v) => set('payment_provider', v)} placeholder="alipay / wechat" />
               <TextField label="支付回调地址" value={form.payment_notify_url} onChange={(v) => set('payment_notify_url', v)} />
               <TextField label="支付宝 AppID" value={form.alipay_app_id} onChange={(v) => set('alipay_app_id', v)} />
+              <TextField label="支付宝 Seller ID" value={form.alipay_seller_id} onChange={(v) => set('alipay_seller_id', v)} placeholder="用于校验回调收款方" />
               <TextField label="支付宝网关" value={form.alipay_gateway_url} onChange={(v) => set('alipay_gateway_url', v)} placeholder="默认官方正式网关" />
               <TextField label="订单标题前缀" value={form.alipay_subject_prefix} onChange={(v) => set('alipay_subject_prefix', v)} />
               <TextField label="微信商户号" value={form.wechat_mch_id} onChange={(v) => set('wechat_mch_id', v)} />

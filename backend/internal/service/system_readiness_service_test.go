@@ -30,6 +30,9 @@ func TestSystemReadinessReportsMissingPaymentSecrets(t *testing.T) {
 	if got := readinessStatus(resp, "payment", "alipay_public_key"); got != readinessError {
 		t.Fatalf("payment.alipay_public_key status = %q, want error", got)
 	}
+	if got := readinessStatus(resp, "payment", "alipay_seller_id"); got != readinessError {
+		t.Fatalf("payment.alipay_seller_id status = %q, want error", got)
+	}
 }
 
 func TestSystemReadinessAcceptsProviderRouteCoverage(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/kleinai/backend/internal/dto"
@@ -14,6 +15,7 @@ import (
 	"github.com/kleinai/backend/internal/repo"
 	"github.com/kleinai/backend/pkg/crypto"
 	"github.com/kleinai/backend/pkg/errcode"
+	"github.com/kleinai/backend/pkg/logger"
 	"github.com/kleinai/backend/pkg/mailer"
 )
 
@@ -39,8 +41,19 @@ func (s *EmailVerificationService) SendCode(ctx context.Context, req *dto.SendEm
 	}
 	if scene == model.EmailVerificationSceneRegister {
 		if u, err := s.users.GetByEmail(ctx, email); err == nil && u != nil {
-			return errcode.UserExists.WithMsg("该邮箱已注册")
+			return nil
 		} else if err != nil && err != repo.ErrNotFound {
+			return errcode.DBError.Wrap(err)
+		}
+	}
+	if scene == model.EmailVerificationSceneResetPassword {
+		if u, err := s.users.GetByEmail(ctx, email); err == nil {
+			if u == nil || !u.IsActive() {
+				return nil
+			}
+		} else if err == repo.ErrNotFound {
+			return nil
+		} else {
 			return errcode.DBError.Wrap(err)
 		}
 	}
@@ -84,6 +97,10 @@ func (s *EmailVerificationService) SendCode(ctx context.Context, req *dto.SendEm
 	}
 	subject, html := mailer.RenderVerificationCode(scene, code, int(verificationTTL/time.Minute))
 	if err := s.mailer.Send(ctx, mailer.Message{To: email, Subject: subject, HTML: html}); err != nil {
+		if expireErr := s.codes.MarkExpired(ctx, row.ID, time.Now().UTC()); expireErr != nil {
+			logger.FromCtx(ctx).Warn("email_verification.expire_after_send_failed_failed", zap.String("email", email), zap.String("scene", scene), zap.Error(expireErr))
+		}
+		logger.FromCtx(ctx).Warn("email_verification.send_failed", zap.String("email", email), zap.String("scene", scene), zap.Error(err))
 		return errcode.Internal.WithMsg("验证码邮件发送失败")
 	}
 	return nil

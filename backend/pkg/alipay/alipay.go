@@ -37,6 +37,7 @@ var (
 
 type Config struct {
 	AppID        string
+	SellerID     string
 	PrivateKey   string
 	AlipayPubKey string
 	GatewayURL   string
@@ -96,6 +97,13 @@ func (c *Client) AppID() string {
 	return c.cfg.AppID
 }
 
+func (c *Client) SellerID() string {
+	if c == nil {
+		return ""
+	}
+	return c.cfg.SellerID
+}
+
 type PrecreateInput struct {
 	OutTradeNo string
 	Subject    string
@@ -139,20 +147,187 @@ func (c *Client) Precreate(ctx context.Context, in PrecreateInput) (*PrecreateRe
 	if in.StoreID != "" {
 		biz["store_id"] = in.StoreID
 	}
+	respRaw, err := c.openAPI(ctx, "alipay.trade.precreate", "alipay_trade_precreate_response", biz, true)
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Code       string `json:"code"`
+		Msg        string `json:"msg"`
+		SubCode    string `json:"sub_code"`
+		SubMsg     string `json:"sub_msg"`
+		OutTradeNo string `json:"out_trade_no"`
+		TradeNo    string `json:"trade_no"`
+		QRCode     string `json:"qr_code"`
+	}
+	if err := json.Unmarshal(respRaw, &response); err != nil {
+		return nil, fmt.Errorf("alipay: decode response: %w", err)
+	}
+	if response.Code != "10000" {
+		return nil, apiError("precreate", response.Code, response.Msg, response.SubCode, response.SubMsg)
+	}
+	if response.QRCode == "" {
+		return nil, errors.New("alipay: empty qr_code")
+	}
+	return &PrecreateResult{
+		OutTradeNo: response.OutTradeNo,
+		TradeNo:    response.TradeNo,
+		QRCode:     response.QRCode,
+	}, nil
+}
+
+type TradeQueryResult struct {
+	OutTradeNo  string
+	TradeNo     string
+	TradeStatus string
+	TotalAmount string
+	BuyerID     string
+}
+
+func (c *Client) Query(ctx context.Context, outTradeNo string) (*TradeQueryResult, error) {
+	if !c.Enabled() {
+		return nil, ErrDisabled
+	}
+	outTradeNo = strings.TrimSpace(outTradeNo)
+	if outTradeNo == "" {
+		return nil, errors.New("alipay: out_trade_no required")
+	}
+	respRaw, err := c.openAPI(ctx, "alipay.trade.query", "alipay_trade_query_response", map[string]any{
+		"out_trade_no": outTradeNo,
+	}, false)
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Code        string         `json:"code"`
+		Msg         string         `json:"msg"`
+		SubCode     string         `json:"sub_code"`
+		SubMsg      string         `json:"sub_msg"`
+		OutTradeNo  string         `json:"out_trade_no"`
+		TradeNo     string         `json:"trade_no"`
+		TradeStatus string         `json:"trade_status"`
+		TotalAmount stringOrNumber `json:"total_amount"`
+		BuyerUserID string         `json:"buyer_user_id"`
+		BuyerID     string         `json:"buyer_id"`
+	}
+	if err := json.Unmarshal(respRaw, &response); err != nil {
+		return nil, fmt.Errorf("alipay: decode response: %w", err)
+	}
+	if response.Code != "10000" {
+		return nil, apiError("query", response.Code, response.Msg, response.SubCode, response.SubMsg)
+	}
+	buyerID := response.BuyerUserID
+	if buyerID == "" {
+		buyerID = response.BuyerID
+	}
+	return &TradeQueryResult{
+		OutTradeNo:  response.OutTradeNo,
+		TradeNo:     response.TradeNo,
+		TradeStatus: response.TradeStatus,
+		TotalAmount: response.TotalAmount.String(),
+		BuyerID:     buyerID,
+	}, nil
+}
+
+type TradeCloseResult struct {
+	OutTradeNo string
+	TradeNo    string
+}
+
+func (c *Client) Close(ctx context.Context, outTradeNo string) (*TradeCloseResult, error) {
+	if !c.Enabled() {
+		return nil, ErrDisabled
+	}
+	outTradeNo = strings.TrimSpace(outTradeNo)
+	if outTradeNo == "" {
+		return nil, errors.New("alipay: out_trade_no required")
+	}
+	respRaw, err := c.openAPI(ctx, "alipay.trade.close", "alipay_trade_close_response", map[string]any{
+		"out_trade_no": outTradeNo,
+	}, false)
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Code       string `json:"code"`
+		Msg        string `json:"msg"`
+		SubCode    string `json:"sub_code"`
+		SubMsg     string `json:"sub_msg"`
+		OutTradeNo string `json:"out_trade_no"`
+		TradeNo    string `json:"trade_no"`
+	}
+	if err := json.Unmarshal(respRaw, &response); err != nil {
+		return nil, fmt.Errorf("alipay: decode response: %w", err)
+	}
+	if response.Code != "10000" {
+		return nil, apiError("close", response.Code, response.Msg, response.SubCode, response.SubMsg)
+	}
+	return &TradeCloseResult{OutTradeNo: response.OutTradeNo, TradeNo: response.TradeNo}, nil
+}
+
+type NotifyPayload struct {
+	AppID       string
+	SellerID    string
+	OutTradeNo  string
+	TradeNo     string
+	TradeStatus string
+	TotalAmount string
+	BuyerID     string
+	Raw         map[string]string
+}
+
+func (c *Client) ParseNotify(form url.Values) (*NotifyPayload, error) {
+	if !c.Enabled() {
+		return nil, ErrDisabled
+	}
+	params := make(map[string]string, len(form))
+	for k := range form {
+		params[k] = form.Get(k)
+	}
+	if !c.Verify(params) {
+		return nil, ErrInvalidSign
+	}
+	return &NotifyPayload{
+		AppID:       params["app_id"],
+		SellerID:    params["seller_id"],
+		OutTradeNo:  params["out_trade_no"],
+		TradeNo:     params["trade_no"],
+		TradeStatus: params["trade_status"],
+		TotalAmount: params["total_amount"],
+		BuyerID:     params["buyer_id"],
+		Raw:         params,
+	}, nil
+}
+
+func (c *Client) Verify(params map[string]string) bool {
+	if c == nil || c.publicKey == nil {
+		return false
+	}
+	sign := params["sign"]
+	if sign == "" {
+		return false
+	}
+	canonical := canonicalString(params)
+	return c.verifyContent(canonical, sign)
+}
+
+func (c *Client) openAPI(ctx context.Context, method, responseKey string, biz map[string]any, includeNotify bool) (json.RawMessage, error) {
 	bizJSON, err := json.Marshal(biz)
 	if err != nil {
 		return nil, err
 	}
 	params := map[string]string{
 		"app_id":      c.cfg.AppID,
-		"method":      "alipay.trade.precreate",
+		"method":      method,
 		"format":      "JSON",
 		"charset":     defaultCharset,
 		"sign_type":   c.cfg.SignType,
 		"timestamp":   time.Now().Format("2006-01-02 15:04:05"),
 		"version":     defaultVersion,
-		"notify_url":  c.cfg.NotifyURL,
 		"biz_content": string(bizJSON),
+	}
+	if includeNotify && c.cfg.NotifyURL != "" {
+		params["notify_url"] = c.cfg.NotifyURL
 	}
 	sign, err := c.sign(params)
 	if err != nil {
@@ -181,87 +356,14 @@ func (c *Client) Precreate(ctx context.Context, in PrecreateInput) (*PrecreateRe
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("alipay: http status %d: %s", resp.StatusCode, string(raw))
 	}
-	respRaw, respSign, err := signedResponse(raw, "alipay_trade_precreate_response")
+	respRaw, respSign, err := signedResponse(raw, responseKey)
 	if err != nil {
 		return nil, err
 	}
 	if !c.verifyContent(string(respRaw), respSign) {
 		return nil, ErrInvalidSign
 	}
-	var response struct {
-		Code       string `json:"code"`
-		Msg        string `json:"msg"`
-		SubCode    string `json:"sub_code"`
-		SubMsg     string `json:"sub_msg"`
-		OutTradeNo string `json:"out_trade_no"`
-		TradeNo    string `json:"trade_no"`
-		QRCode     string `json:"qr_code"`
-	}
-	if err := json.Unmarshal(respRaw, &response); err != nil {
-		return nil, fmt.Errorf("alipay: decode response: %w", err)
-	}
-	if response.Code != "10000" {
-		msg := response.SubMsg
-		if msg == "" {
-			msg = response.Msg
-		}
-		if response.SubCode != "" {
-			msg = response.SubCode + ": " + msg
-		}
-		return nil, fmt.Errorf("alipay: precreate failed: %s", msg)
-	}
-	if response.QRCode == "" {
-		return nil, errors.New("alipay: empty qr_code")
-	}
-	return &PrecreateResult{
-		OutTradeNo: response.OutTradeNo,
-		TradeNo:    response.TradeNo,
-		QRCode:     response.QRCode,
-	}, nil
-}
-
-type NotifyPayload struct {
-	AppID       string
-	OutTradeNo  string
-	TradeNo     string
-	TradeStatus string
-	TotalAmount string
-	BuyerID     string
-	Raw         map[string]string
-}
-
-func (c *Client) ParseNotify(form url.Values) (*NotifyPayload, error) {
-	if !c.Enabled() {
-		return nil, ErrDisabled
-	}
-	params := make(map[string]string, len(form))
-	for k := range form {
-		params[k] = form.Get(k)
-	}
-	if !c.Verify(params) {
-		return nil, ErrInvalidSign
-	}
-	return &NotifyPayload{
-		AppID:       params["app_id"],
-		OutTradeNo:  params["out_trade_no"],
-		TradeNo:     params["trade_no"],
-		TradeStatus: params["trade_status"],
-		TotalAmount: params["total_amount"],
-		BuyerID:     params["buyer_id"],
-		Raw:         params,
-	}, nil
-}
-
-func (c *Client) Verify(params map[string]string) bool {
-	if c == nil || c.publicKey == nil {
-		return false
-	}
-	sign := params["sign"]
-	if sign == "" {
-		return false
-	}
-	canonical := canonicalString(params)
-	return c.verifyContent(canonical, sign)
+	return respRaw, nil
 }
 
 func (c *Client) verifyContent(content, sign string) bool {
@@ -329,6 +431,41 @@ func signedResponse(raw []byte, responseKey string) (json.RawMessage, string, er
 		return nil, "", errors.New("alipay: empty response sign")
 	}
 	return respRaw, sign, nil
+}
+
+type stringOrNumber string
+
+func (s *stringOrNumber) UnmarshalJSON(raw []byte) error {
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" {
+		*s = ""
+		return nil
+	}
+	var quoted string
+	if err := json.Unmarshal(raw, &quoted); err == nil {
+		*s = stringOrNumber(quoted)
+		return nil
+	}
+	*s = stringOrNumber(text)
+	return nil
+}
+
+func (s stringOrNumber) String() string {
+	return string(s)
+}
+
+func apiError(op, code, msg, subCode, subMsg string) error {
+	text := subMsg
+	if text == "" {
+		text = msg
+	}
+	if subCode != "" {
+		text = subCode + ": " + text
+	}
+	if text == "" {
+		text = code
+	}
+	return fmt.Errorf("alipay: %s failed: %s", op, text)
 }
 
 func amountYuan(fen int64) string {

@@ -72,7 +72,7 @@ func (h *AuthHandler) SendEmailCode(c *gin.Context) {
 		response.Fail(c, err)
 		return
 	}
-	response.OK(c, gin.H{"message": "验证码已发送"})
+	response.OK(c, gin.H{"message": "如果邮箱可用，验证码已发送，请查看邮箱"})
 }
 
 // ResetPassword POST /api/v1/auth/password/reset

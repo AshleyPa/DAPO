@@ -93,6 +93,9 @@ func (s *AuthService) Register(ctx context.Context, req *dto.RegisterReq, ip str
 		return nil
 	})
 	if err != nil {
+		if e, ok := errcode.As(err); ok && e.Code == errcode.UserExists.Code {
+			return nil, nil, errcode.InvalidParam.WithMsg("注册失败，请检查邮箱或验证码后重试")
+		}
 		return nil, nil, err
 	}
 
@@ -113,7 +116,7 @@ func (s *AuthService) Login(ctx context.Context, req *dto.LoginReq, ip string) (
 	u, err := s.user.GetByAccount(ctx, account)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
-			return nil, nil, errcode.UserNotFound
+			return nil, nil, errcode.Unauthorized.WithMsg("账号或密码错误")
 		}
 		return nil, nil, errcode.DBError.Wrap(err)
 	}
@@ -197,12 +200,12 @@ func (s *AuthService) ResetPassword(ctx context.Context, req *dto.ResetPasswordR
 		var u model.User
 		if err := tx.Where("email = ? AND deleted_at IS NULL", email).First(&u).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errcode.UserNotFound
+				return errcode.InvalidParam.WithMsg("重置失败，请检查邮箱或验证码后重试")
 			}
 			return errcode.DBError.Wrap(err)
 		}
 		if !u.IsActive() {
-			return errcode.Forbidden.WithMsg("账号已停用")
+			return errcode.InvalidParam.WithMsg("重置失败，请检查邮箱或验证码后重试")
 		}
 		if err := tx.Model(&model.User{}).
 			Where("id = ?", u.ID).

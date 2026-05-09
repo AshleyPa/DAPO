@@ -33,6 +33,7 @@ const (
 	SettingAlipayAppID         = "payment.alipay_app_id"
 	SettingAlipayPrivateKey    = "payment.alipay_private_key"
 	SettingAlipayPublicKey     = "payment.alipay_public_key"
+	SettingAlipaySellerID      = "payment.alipay_seller_id"
 	SettingAlipayGatewayURL    = "payment.alipay_gateway_url"
 	SettingAlipaySubjectPrefix = "payment.alipay_subject_prefix"
 
@@ -80,7 +81,7 @@ func (s *RechargeService) CreateOrder(ctx context.Context, userID uint64, req *d
 	idemKey = normalizeIdemKey(idemKey)
 	if idemKey != "" {
 		if existing, err := s.repo.GetByIdem(ctx, userID, idemKey); err == nil && existing != nil {
-			existing, err = s.expirePendingOrder(ctx, existing)
+			existing, err = s.refreshPendingAlipayOrder(ctx, existing)
 			if err != nil {
 				return nil, err
 			}
@@ -190,7 +191,7 @@ func (s *RechargeService) GetUserOrder(ctx context.Context, userID uint64, order
 		}
 		return nil, errcode.DBError.Wrap(err)
 	}
-	row, err = s.expirePendingOrder(ctx, row)
+	row, err = s.refreshPendingAlipayOrder(ctx, row)
 	if err != nil {
 		return nil, err
 	}
@@ -204,11 +205,6 @@ func (s *RechargeService) ListUserOrders(ctx context.Context, userID uint64, pag
 	}
 	out := make([]*dto.RechargeOrderResp, 0, len(rows))
 	for _, row := range rows {
-		if refreshed, err := s.expirePendingOrder(ctx, row); err == nil {
-			row = refreshed
-		} else {
-			return nil, 0, err
-		}
 		out = append(out, orderResp(row))
 	}
 	return out, total, nil
@@ -224,8 +220,9 @@ func (s *RechargeService) HandleAlipayNotify(ctx context.Context, form url.Value
 		logger.FromCtx(ctx).Warn("alipay.notify.invalid_signature", zap.String("order_no", form.Get("out_trade_no")), zap.Error(err))
 		return "fail", err
 	}
-	if pl.AppID != "" && pl.AppID != client.AppID() {
-		return "fail", fmt.Errorf("alipay app_id mismatch")
+	if err := validateAlipayNotifyIdentity(client, pl); err != nil {
+		logger.FromCtx(ctx).Warn("alipay.notify.identity_mismatch", zap.String("order_no", pl.OutTradeNo), zap.Error(err))
+		return "fail", err
 	}
 	if pl.TradeStatus != "TRADE_SUCCESS" && pl.TradeStatus != "TRADE_FINISHED" {
 		return "success", nil
@@ -254,6 +251,9 @@ func (s *RechargeService) settleAlipay(ctx context.Context, pl *alipay.NotifyPay
 		if order.Channel != model.RechargeChannelAlipay {
 			return fmt.Errorf("channel mismatch: %s", order.Channel)
 		}
+		if err := validateAlipayTradeNo(order.ChannelTradeNo, pl.TradeNo); err != nil {
+			return err
+		}
 		if err := verifyAmount(pl.TotalAmount, order.Amount); err != nil {
 			return err
 		}
@@ -268,7 +268,7 @@ func (s *RechargeService) settleAlipay(ctx context.Context, pl *alipay.NotifyPay
 		before := u.Points
 		after := before + credit
 		now := time.Now().UTC()
-		extra := mergeExtra(order.Extra, map[string]any{"notify": pl.Raw, "buyer_id": pl.BuyerID})
+		extra := mergeExtra(order.Extra, map[string]any{"notify": pl.Raw, "buyer_id": pl.BuyerID, "seller_id": pl.SellerID})
 		res := tx.Model(&model.RechargeRecord{}).Where("id = ? AND status = ?", order.ID, model.RechargeStatusPending).
 			Updates(map[string]any{
 				"status":           model.RechargeStatusPaid,
@@ -345,6 +345,7 @@ func (s *RechargeService) paymentProvider(ctx context.Context) string {
 func (s *RechargeService) alipayClient(ctx context.Context) (*alipay.Client, error) {
 	cfg := alipay.Config{
 		AppID:        envString("KLEIN_ALIPAY_APP_ID", s.sys.GetString(ctx, SettingAlipayAppID, "")),
+		SellerID:     envString("KLEIN_ALIPAY_SELLER_ID", s.sys.GetString(ctx, SettingAlipaySellerID, "")),
 		PrivateKey:   envString("KLEIN_ALIPAY_PRIVATE_KEY", s.sys.GetString(ctx, SettingAlipayPrivateKey, "")),
 		AlipayPubKey: envString("KLEIN_ALIPAY_PUBLIC_KEY", s.sys.GetString(ctx, SettingAlipayPublicKey, "")),
 		GatewayURL:   envString("KLEIN_ALIPAY_GATEWAY_URL", s.sys.GetString(ctx, SettingAlipayGatewayURL, "")),
@@ -397,12 +398,109 @@ func orderResp(row *model.RechargeRecord) *dto.RechargeOrderResp {
 	}
 }
 
-func (s *RechargeService) expirePendingOrder(ctx context.Context, row *model.RechargeRecord) (*model.RechargeRecord, error) {
-	if !isExpiredPendingRecharge(row, time.Now()) {
+func (s *RechargeService) refreshPendingAlipayOrder(ctx context.Context, row *model.RechargeRecord) (*model.RechargeRecord, error) {
+	if row == nil || row.Status != model.RechargeStatusPending || row.Channel != model.RechargeChannelAlipay {
+		return row, nil
+	}
+	client, err := s.alipayClient(ctx)
+	if err != nil {
+		logger.FromCtx(ctx).Warn("alipay.query.client_unavailable", zap.String("order_no", row.OrderNo), zap.Error(err))
+		return row, nil
+	}
+	if !client.Enabled() {
+		return row, nil
+	}
+	query, err := client.Query(ctx, row.OrderNo)
+	if err != nil {
+		logger.FromCtx(ctx).Warn("alipay.query.failed", zap.String("order_no", row.OrderNo), zap.Error(err))
+		return row, nil
+	}
+	status := strings.TrimSpace(query.TradeStatus)
+	queryOutTradeNo := strings.TrimSpace(query.OutTradeNo)
+	if queryOutTradeNo != "" && queryOutTradeNo != row.OrderNo {
+		logger.FromCtx(ctx).Warn("alipay.query.out_trade_no_mismatch", zap.String("order_no", row.OrderNo), zap.String("got", queryOutTradeNo))
+		return row, nil
+	}
+	extra := map[string]any{
+		"alipay_query_at":           time.Now().UTC().Format(time.RFC3339),
+		"alipay_query_trade_status": status,
+	}
+	switch status {
+	case "TRADE_SUCCESS", "TRADE_FINISHED":
+		pl := &alipay.NotifyPayload{
+			AppID:       client.AppID(),
+			OutTradeNo:  strings.TrimSpace(query.OutTradeNo),
+			TradeNo:     strings.TrimSpace(query.TradeNo),
+			TradeStatus: status,
+			TotalAmount: strings.TrimSpace(query.TotalAmount),
+			BuyerID:     strings.TrimSpace(query.BuyerID),
+			Raw: map[string]string{
+				"source":       "trade_query",
+				"out_trade_no": strings.TrimSpace(query.OutTradeNo),
+				"trade_no":     strings.TrimSpace(query.TradeNo),
+				"trade_status": status,
+				"total_amount": strings.TrimSpace(query.TotalAmount),
+				"buyer_id":     strings.TrimSpace(query.BuyerID),
+			},
+		}
+		if pl.OutTradeNo == "" {
+			pl.OutTradeNo = row.OrderNo
+		}
+		if err := s.settleAlipay(ctx, pl); err != nil {
+			return nil, err
+		}
+		refreshed, err := s.repo.GetByOrderNo(ctx, row.OrderNo)
+		if err != nil {
+			return nil, errcode.DBError.Wrap(err)
+		}
+		return refreshed, nil
+	case "TRADE_CLOSED":
+		return s.expirePendingOrder(ctx, row, extra)
+	}
+	if isExpiredPendingRecharge(row, time.Now()) {
+		return s.closeExpiredPendingAlipayOrder(ctx, row, client, extra)
+	}
+	return row, nil
+}
+
+func (s *RechargeService) closeExpiredPendingAlipayOrder(ctx context.Context, row *model.RechargeRecord, client *alipay.Client, extra map[string]any) (*model.RechargeRecord, error) {
+	now := time.Now().UTC()
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	closeRes, err := client.Close(ctx, row.OrderNo)
+	if err != nil {
+		logger.FromCtx(ctx).Warn("alipay.close.failed", zap.String("order_no", row.OrderNo), zap.Error(err))
+		extra["alipay_close_failed_at"] = now.Format(time.RFC3339)
+		extra["alipay_close_error"] = err.Error()
+		merged := mergeExtra(row.Extra, extra)
+		_, updateErr := s.repo.UpdateIfStatus(ctx, row.ID, model.RechargeStatusPending, map[string]any{"extra": merged})
+		if updateErr != nil {
+			return nil, errcode.DBError.Wrap(updateErr)
+		}
+		row.Extra = &merged
+		return row, nil
+	}
+	extra["alipay_close_at"] = now.Format(time.RFC3339)
+	extra["alipay_close_out_trade_no"] = closeRes.OutTradeNo
+	extra["alipay_close_trade_no"] = closeRes.TradeNo
+	return s.expirePendingOrder(ctx, row, extra)
+}
+
+func (s *RechargeService) expirePendingOrder(ctx context.Context, row *model.RechargeRecord, extraFields map[string]any) (*model.RechargeRecord, error) {
+	force := false
+	if extraFields != nil && strings.TrimSpace(fmt.Sprint(extraFields["alipay_query_trade_status"])) == "TRADE_CLOSED" {
+		force = true
+	}
+	if !force && !isExpiredPendingRecharge(row, time.Now()) {
 		return row, nil
 	}
 	now := time.Now().UTC()
-	extra := mergeExtra(row.Extra, map[string]any{"expired_at": now.Format(time.RFC3339)})
+	if extraFields == nil {
+		extraFields = map[string]any{}
+	}
+	extraFields["expired_at"] = now.Format(time.RFC3339)
+	extra := mergeExtra(row.Extra, extraFields)
 	affected, err := s.repo.UpdateIfStatus(ctx, row.ID, model.RechargeStatusPending, map[string]any{
 		"status": model.RechargeStatusExpired,
 		"extra":  extra,
@@ -421,6 +519,46 @@ func (s *RechargeService) expirePendingOrder(ctx context.Context, row *model.Rec
 	row.Extra = &extra
 	row.UpdatedAt = now
 	return row, nil
+}
+
+func validateAlipayNotifyIdentity(client *alipay.Client, pl *alipay.NotifyPayload) error {
+	if client == nil || pl == nil {
+		return fmt.Errorf("alipay notify payload missing")
+	}
+	appID := strings.TrimSpace(client.AppID())
+	if appID != "" {
+		got := strings.TrimSpace(pl.AppID)
+		if got == "" {
+			return fmt.Errorf("alipay app_id missing")
+		}
+		if got != appID {
+			return fmt.Errorf("alipay app_id mismatch")
+		}
+	}
+	sellerID := strings.TrimSpace(client.SellerID())
+	if sellerID == "" {
+		return nil
+	}
+	gotSellerID := strings.TrimSpace(pl.SellerID)
+	if gotSellerID == "" {
+		return fmt.Errorf("alipay seller_id missing")
+	}
+	if gotSellerID != sellerID {
+		return fmt.Errorf("alipay seller_id mismatch")
+	}
+	return nil
+}
+
+func validateAlipayTradeNo(stored *string, got string) error {
+	storedValue := ""
+	if stored != nil {
+		storedValue = strings.TrimSpace(*stored)
+	}
+	got = strings.TrimSpace(got)
+	if storedValue != "" && got != "" && storedValue != got {
+		return fmt.Errorf("alipay trade_no mismatch")
+	}
+	return nil
 }
 
 func isExpiredPendingRecharge(row *model.RechargeRecord, now time.Time) bool {

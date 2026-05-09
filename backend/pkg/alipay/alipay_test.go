@@ -95,6 +95,93 @@ func TestPrecreateRejectsInvalidResponseSignature(t *testing.T) {
 	}
 }
 
+func TestQueryVerifiesResponseSignatureAndParsesStatus(t *testing.T) {
+	appKey := mustRSAKey(t)
+	alipayKey := mustRSAKey(t)
+
+	client := newTestClient(t, appKey, &alipayKey.PublicKey, func(r *http.Request) (*http.Response, error) {
+		values, err := requestValues(r)
+		if err != nil {
+			return nil, err
+		}
+		if values.Get("method") != "alipay.trade.query" {
+			return nil, fmt.Errorf("method = %q", values.Get("method"))
+		}
+		params := valuesToMap(values)
+		if !verifyWithPublic(&appKey.PublicKey, canonicalString(params), params["sign"]) {
+			return nil, fmt.Errorf("request signature failed")
+		}
+		response := `{"code":"10000","msg":"Success","out_trade_no":"R1","trade_no":"T1","trade_status":"TRADE_SUCCESS","total_amount":10.00,"buyer_user_id":"2088"}`
+		sign := signWithKey(t, alipayKey, response)
+		return jsonResponse(fmt.Sprintf(`{"alipay_trade_query_response":%s,"sign":%q}`, response, sign)), nil
+	})
+
+	got, err := client.Query(context.Background(), "R1")
+	if err != nil {
+		t.Fatalf("Query() error = %v", err)
+	}
+	if got.TradeStatus != "TRADE_SUCCESS" || got.TotalAmount != "10.00" || got.BuyerID != "2088" {
+		t.Fatalf("Query() = %+v", got)
+	}
+}
+
+func TestCloseVerifiesResponseSignature(t *testing.T) {
+	appKey := mustRSAKey(t)
+	alipayKey := mustRSAKey(t)
+
+	client := newTestClient(t, appKey, &alipayKey.PublicKey, func(r *http.Request) (*http.Response, error) {
+		values, err := requestValues(r)
+		if err != nil {
+			return nil, err
+		}
+		if values.Get("method") != "alipay.trade.close" {
+			return nil, fmt.Errorf("method = %q", values.Get("method"))
+		}
+		params := valuesToMap(values)
+		if !verifyWithPublic(&appKey.PublicKey, canonicalString(params), params["sign"]) {
+			return nil, fmt.Errorf("request signature failed")
+		}
+		response := `{"code":"10000","msg":"Success","out_trade_no":"R1","trade_no":"T1"}`
+		sign := signWithKey(t, alipayKey, response)
+		return jsonResponse(fmt.Sprintf(`{"alipay_trade_close_response":%s,"sign":%q}`, response, sign)), nil
+	})
+
+	got, err := client.Close(context.Background(), "R1")
+	if err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if got.OutTradeNo != "R1" || got.TradeNo != "T1" {
+		t.Fatalf("Close() = %+v", got)
+	}
+}
+
+func TestParseNotifyIncludesSellerID(t *testing.T) {
+	appKey := mustRSAKey(t)
+	alipayKey := mustRSAKey(t)
+	client := newTestClient(t, appKey, &alipayKey.PublicKey, func(r *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("unexpected request")
+	})
+	form := url.Values{
+		"app_id":       {"app_123"},
+		"seller_id":    {"seller_123"},
+		"out_trade_no": {"R1"},
+		"trade_no":     {"T1"},
+		"trade_status": {"TRADE_SUCCESS"},
+		"total_amount": {"10.00"},
+		"sign_type":    {"RSA2"},
+	}
+	params := valuesToMap(form)
+	form.Set("sign", signWithKey(t, alipayKey, canonicalString(params)))
+
+	got, err := client.ParseNotify(form)
+	if err != nil {
+		t.Fatalf("ParseNotify() error = %v", err)
+	}
+	if got.SellerID != "seller_123" {
+		t.Fatalf("SellerID = %q", got.SellerID)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -115,6 +202,22 @@ func newTestClient(t *testing.T, appKey *rsa.PrivateKey, alipayPub *rsa.PublicKe
 	}
 	client.httpClient = &http.Client{Transport: roundTrip}
 	return client
+}
+
+func requestValues(r *http.Request) (url.Values, error) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	return url.ParseQuery(string(body))
+}
+
+func valuesToMap(values url.Values) map[string]string {
+	params := map[string]string{}
+	for k := range values {
+		params[k] = values.Get(k)
+	}
+	return params
 }
 
 func jsonResponse(body string) *http.Response {

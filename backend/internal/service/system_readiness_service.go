@@ -122,6 +122,7 @@ func (s *SystemReadinessService) paymentChecks(ctx context.Context) []dto.AdminS
 	}{
 		{"notify_url", "支付回调地址", "KLEIN_PAYMENT_NOTIFY_URL", SettingPaymentNotifyURL},
 		{"alipay_app_id", "支付宝 AppID", "KLEIN_ALIPAY_APP_ID", SettingAlipayAppID},
+		{"alipay_seller_id", "支付宝 Seller ID", "KLEIN_ALIPAY_SELLER_ID", SettingAlipaySellerID},
 		{"alipay_private_key", "支付宝应用私钥", "KLEIN_ALIPAY_PRIVATE_KEY", SettingAlipayPrivateKey},
 		{"alipay_public_key", "支付宝公钥", "KLEIN_ALIPAY_PUBLIC_KEY", SettingAlipayPublicKey},
 	}

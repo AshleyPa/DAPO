@@ -64,6 +64,15 @@ func (r *EmailVerificationRepo) IncrementAttempts(ctx context.Context, tx *gorm.
 		UpdateColumn("attempts", gorm.Expr("attempts + 1")).Error
 }
 
+func (r *EmailVerificationRepo) MarkExpired(ctx context.Context, id uint64, now time.Time) error {
+	return r.db.WithContext(ctx).Model(&model.EmailVerificationCode{}).
+		Where("id = ? AND status = ?", id, model.EmailVerificationStatusPending).
+		Updates(map[string]any{
+			"status":     model.EmailVerificationStatusExpired,
+			"updated_at": now,
+		}).Error
+}
+
 func (r *EmailVerificationRepo) MarkUsed(ctx context.Context, tx *gorm.DB, id uint64, now time.Time) error {
 	res := tx.WithContext(ctx).Model(&model.EmailVerificationCode{}).
 		Where("id = ? AND status = ?", id, model.EmailVerificationStatusPending).

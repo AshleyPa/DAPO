@@ -77,7 +77,11 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 		if deps.Limiter != nil {
 			auth.Use(middleware.RateLimitIP(deps.Limiter, 30))
 		}
-		auth.POST("/email/code", authH.SendEmailCode)
+		emailCodeHandlers := []gin.HandlerFunc{authH.SendEmailCode}
+		if deps.Limiter != nil {
+			emailCodeHandlers = append([]gin.HandlerFunc{middleware.RateLimitIP(deps.Limiter, 5)}, emailCodeHandlers...)
+		}
+		auth.POST("/email/code", emailCodeHandlers...)
 		auth.POST("/register", authH.Register)
 		auth.POST("/login", authH.Login)
 		auth.POST("/password/reset", authH.ResetPassword)

@@ -1,41 +1,38 @@
 package service
 
 import (
+	"strings"
 	"testing"
-	"time"
 
-	"github.com/kleinai/backend/internal/model"
+	"github.com/kleinai/backend/pkg/alipay"
 )
 
-func TestIsExpiredPendingRecharge(t *testing.T) {
-	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
-	cases := []struct {
-		name string
-		row  *model.RechargeRecord
-		want bool
-	}{
-		{
-			name: "pending order older than ttl expires",
-			row:  &model.RechargeRecord{Status: model.RechargeStatusPending, CreatedAt: now.Add(-rechargeOrderTTL - time.Second)},
-			want: true,
-		},
-		{
-			name: "pending order inside ttl stays pending",
-			row:  &model.RechargeRecord{Status: model.RechargeStatusPending, CreatedAt: now.Add(-rechargeOrderTTL + time.Second)},
-			want: false,
-		},
-		{
-			name: "paid order never expires locally",
-			row:  &model.RechargeRecord{Status: model.RechargeStatusPaid, CreatedAt: now.Add(-24 * time.Hour)},
-			want: false,
-		},
+func TestValidateAlipayNotifyIdentityRequiresConfiguredSellerID(t *testing.T) {
+	client, err := alipay.NewClient(alipay.Config{AppID: "app_123", SellerID: "seller_123"})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isExpiredPendingRecharge(tc.row, now); got != tc.want {
-				t.Fatalf("isExpiredPendingRecharge() = %v, want %v", got, tc.want)
-			}
-		})
+	if err := validateAlipayNotifyIdentity(client, &alipay.NotifyPayload{AppID: "app_123", SellerID: "seller_123"}); err != nil {
+		t.Fatalf("validateAlipayNotifyIdentity() error = %v", err)
+	}
+	if err := validateAlipayNotifyIdentity(client, &alipay.NotifyPayload{AppID: "app_123"}); err == nil || !strings.Contains(err.Error(), "seller_id missing") {
+		t.Fatalf("missing seller_id error = %v", err)
+	}
+	if err := validateAlipayNotifyIdentity(client, &alipay.NotifyPayload{AppID: "app_123", SellerID: "seller_456"}); err == nil || !strings.Contains(err.Error(), "seller_id mismatch") {
+		t.Fatalf("mismatched seller_id error = %v", err)
+	}
+}
+
+func TestValidateAlipayTradeNoRejectsMismatch(t *testing.T) {
+	stored := "T1"
+	if err := validateAlipayTradeNo(&stored, "T1"); err != nil {
+		t.Fatalf("validateAlipayTradeNo() error = %v", err)
+	}
+	if err := validateAlipayTradeNo(&stored, "T2"); err == nil || !strings.Contains(err.Error(), "trade_no mismatch") {
+		t.Fatalf("mismatch error = %v", err)
+	}
+	if err := validateAlipayTradeNo(&stored, ""); err != nil {
+		t.Fatalf("empty notify trade_no should be allowed, got %v", err)
 	}
 }
