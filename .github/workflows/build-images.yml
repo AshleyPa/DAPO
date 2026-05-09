@@ -40,6 +40,10 @@ jobs:
             context: frontend
             file: frontend/apps/gateway/Dockerfile
             image: dapo-gateway
+          - name: all-in-one
+            context: .
+            file: deploy/all-in-one/Dockerfile
+            image: dapo-all-in-one
 
     steps:
       - name: Checkout
