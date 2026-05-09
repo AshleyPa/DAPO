@@ -44,6 +44,7 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 	sysCfgSvc := service.NewSystemConfigService(sysCfgRepo)
 	emailVerifier := service.NewEmailVerificationService(emailCodeRepo, userRepo, deps.Cfg.SMTP, sysCfgSvc)
 	authSvc := service.NewAuthService(deps.DB, userRepo, deps.JWT, emailVerifier)
+	humanSvc := service.NewHumanVerificationService(deps.Cfg, sysCfgSvc)
 	userSvc := service.NewUserService(userRepo)
 	keySvc := service.NewAPIKeyService(apiKeyRepo)
 	billingSvc := service.NewBillingService(deps.DB, walletRepo)
@@ -58,13 +59,14 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 	genSvc := service.NewGenerationService(deps.DB, genRepo, pool, billingSvc, providers, service.ConfigPriceFn(sysCfgSvc), deps.AES, proxySvc, sysCfgSvc, routeSvc)
 	chatSvc := service.NewChatService(deps.DB, genRepo, pool, billingSvc, sysCfgSvc, routeSvc, deps.AES, proxySvc)
 
-	authH := handler.NewAuthHandler(authSvc, userSvc)
+	authH := handler.NewAuthHandler(authSvc, userSvc, humanSvc)
 	keyH := handler.NewAPIKeyHandler(keySvc)
 	billH := handler.NewBillingHandler(billingSvc, cdkSvc, rechargeSvc)
 	genH := handler.NewGenerationHandler(genSvc, chatSvc, genRepo, accountRepo, sysCfgSvc, deps.AES)
 	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc)
 
 	v1.GET("/models", genH.Models)
+	v1.GET("/public/human-verification", authH.HumanVerificationConfig)
 	v1.GET("/public/prompt-gallery", promptGalleryH.PublicList)
 	v1.GET("/gen/cached/*path", genH.CachedAsset)
 	v1.GET("/gen/assets/:task_id/:seq", genH.Asset)

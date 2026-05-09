@@ -32,6 +32,7 @@ func (s *SystemReadinessService) Check(ctx context.Context) (*dto.AdminSystemRea
 	checks := make([]dto.AdminSystemReadinessCheck, 0, 24)
 	checks = append(checks, s.runtimeChecks()...)
 	checks = append(checks, s.smtpChecks(ctx)...)
+	checks = append(checks, s.humanVerificationChecks(ctx)...)
 	checks = append(checks, s.paymentChecks(ctx)...)
 	checks = append(checks, s.providerRouteChecks(ctx)...)
 	checks = append(checks, s.storageChecks(ctx)...)
@@ -103,6 +104,33 @@ func (s *SystemReadinessService) smtpChecks(ctx context.Context) []dto.AdminSyst
 		checks = append(checks, warnCheck("smtp", "from_name", "发件名称", "未配置 KLEIN_SMTP_FROM_NAME 或 smtp.from_name，邮件发件展示不完整", fromNameSource, false))
 	} else {
 		checks = append(checks, okCheck("smtp", "from_name", "发件名称", "已配置发件名称", fromNameSource, false))
+	}
+	return checks
+}
+
+func (s *SystemReadinessService) humanVerificationChecks(ctx context.Context) []dto.AdminSystemReadinessCheck {
+	cfg := config.Turnstile{}
+	if s.cfg != nil {
+		cfg = s.cfg.Turnstile
+	}
+	enabled, enabledSource := s.effectiveBool(ctx, "KLEIN_TURNSTILE_ENABLED", SettingTurnstileEnabled, cfg.Enabled)
+	checks := []dto.AdminSystemReadinessCheck{
+		boolCheck("human_verification", "turnstile_enabled", "Cloudflare Turnstile", enabled, "登录、注册和邮箱验证码已启用人机验证", "未启用人机验证，登录注册仍仅依赖限流保护", enabledSource, false),
+	}
+	if !enabled {
+		return checks
+	}
+	siteKey, siteKeySource := s.effectiveString(ctx, "KLEIN_TURNSTILE_SITE_KEY", SettingTurnstileSiteKey, cfg.SiteKey)
+	secretKey, secretKeySource := s.effectiveString(ctx, "KLEIN_TURNSTILE_SECRET_KEY", SettingTurnstileSecretKey, cfg.SecretKey)
+	hostnames := s.effectiveTurnstileHostnames(ctx, cfg.AllowedHostnames)
+	checks = append(checks,
+		requiredCheck("human_verification", "turnstile_site_key", "Turnstile Site Key", strings.TrimSpace(siteKey) != "", "已配置前端站点 key", "人机验证已启用，但缺少 Turnstile Site Key", siteKeySource),
+		requiredCheck("human_verification", "turnstile_secret_key", "Turnstile Secret Key", strings.TrimSpace(secretKey) != "", "已配置服务端校验密钥", "人机验证已启用，但缺少 Turnstile Secret Key", secretKeySource),
+	)
+	if len(hostnames) == 0 {
+		checks = append(checks, warnCheck("human_verification", "turnstile_hostnames", "Turnstile 域名白名单", "未显式配置域名白名单，将使用请求 Host 做校验", "request_host", false))
+	} else {
+		checks = append(checks, okCheck("human_verification", "turnstile_hostnames", "Turnstile 域名白名单", fmt.Sprintf("已配置 %d 个允许域名", len(hostnames)), "system_config_or_env", false))
 	}
 	return checks
 }
@@ -241,6 +269,18 @@ func (s *SystemReadinessService) effectiveBool(ctx context.Context, envKey, conf
 		return s.sys.GetBool(ctx, configKey, fallback), "system_config"
 	}
 	return fallback, "missing"
+}
+
+func (s *SystemReadinessService) effectiveTurnstileHostnames(ctx context.Context, fallback []string) []string {
+	if value := strings.TrimSpace(os.Getenv("KLEIN_TURNSTILE_ALLOWED_HOSTNAMES")); value != "" {
+		return splitCSV(value)
+	}
+	if s.sys != nil {
+		if value := strings.TrimSpace(s.sys.GetString(ctx, SettingTurnstileHostnames, "")); value != "" {
+			return splitCSV(value)
+		}
+	}
+	return fallback
 }
 
 func (s *SystemReadinessService) effectiveSMTPString(ctx context.Context, envKey, configKey, fallback string) (string, string) {

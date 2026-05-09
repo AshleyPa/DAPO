@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import clsx from 'clsx';
 
+import { useHumanVerification } from '../../components/HumanVerification';
 import { ApiError } from '../../lib/api';
 import { authApi } from '../../lib/services';
 import { toast } from '../../stores/toast';
@@ -30,6 +31,7 @@ type FormValues = z.infer<typeof schema>;
 
 export default function ForgotPasswordPage() {
   const navigate = useNavigate();
+  const human = useHumanVerification('auth');
   const {
     register,
     handleSubmit,
@@ -56,12 +58,18 @@ export default function ForgotPasswordPage() {
       toast.error('请先填写有效邮箱');
       return;
     }
+    if (human.isRequired && !human.token) {
+      toast.error('请先完成人机验证');
+      return;
+    }
     try {
       setSendingCode(true);
-      await authApi.sendEmailCode({ email, scene: 'reset_password' });
+      await authApi.sendEmailCode({ email, scene: 'reset_password', turnstile_token: human.token || undefined });
       setCooldown(60);
       toast.success('验证码已发送，请查看邮箱');
+      human.reset();
     } catch (err) {
+      human.reset();
       toast.error(err instanceof ApiError ? err.message : '验证码发送失败');
     } finally {
       setSendingCode(false);
@@ -69,15 +77,21 @@ export default function ForgotPasswordPage() {
   };
 
   const onSubmit = async (values: FormValues) => {
+    if (human.isRequired && !human.token) {
+      toast.error('请先完成人机验证');
+      return;
+    }
     try {
       await authApi.resetPassword({
         email: values.email,
         code: values.code,
         password: values.password,
+        turnstile_token: human.token || undefined,
       });
       toast.success('密码已重置，请重新登录');
       navigate('/login', { replace: true });
     } catch (err) {
+      human.reset();
       toast.error(err instanceof ApiError ? err.message : '密码重置失败');
     }
   };
@@ -111,12 +125,14 @@ export default function ForgotPasswordPage() {
               autoComplete="one-time-code"
               {...register('code')}
             />
-            <button className="btn btn-outline btn-lg shrink-0" type="button" disabled={sendingCode || cooldown > 0 || !emailValue} onClick={sendCode}>
+            <button className="btn btn-outline btn-lg shrink-0" type="button" disabled={sendingCode || cooldown > 0 || !emailValue || human.isLoading || !human.isSatisfied} onClick={sendCode}>
               {cooldown > 0 ? `${cooldown}s` : sendingCode ? '发送中…' : '获取验证码'}
             </button>
           </div>
           {errors.code && <p className="field-error">{errors.code.message}</p>}
         </div>
+
+        {human.element}
 
         <div className="field">
           <label className="field-label">新密码</label>
@@ -142,7 +158,7 @@ export default function ForgotPasswordPage() {
           {errors.confirm && <p className="field-error">{errors.confirm.message}</p>}
         </div>
 
-        <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={isSubmitting}>
+        <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={isSubmitting || human.isLoading || !human.isSatisfied}>
           {isSubmitting ? '重置中…' : '重 置 密 码'}
         </button>
       </form>

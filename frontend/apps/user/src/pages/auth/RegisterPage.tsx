@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import clsx from 'clsx';
 
+import { useHumanVerification } from '../../components/HumanVerification';
 import { ApiError } from '../../lib/api';
 import { authApi } from '../../lib/services';
 import { useAuthStore } from '../../stores/auth';
@@ -34,6 +35,7 @@ export default function RegisterPage() {
   const navigate = useNavigate();
   const setToken = useAuthStore((s) => s.setToken);
   const refreshMe = useAuthStore((s) => s.refreshMe);
+  const human = useHumanVerification('auth');
 
   const {
     register,
@@ -61,12 +63,18 @@ export default function RegisterPage() {
       toast.error('请先填写有效邮箱');
       return;
     }
+    if (human.isRequired && !human.token) {
+      toast.error('请先完成人机验证');
+      return;
+    }
     try {
       setSendingCode(true);
-      await authApi.sendEmailCode({ email, scene: 'register' });
+      await authApi.sendEmailCode({ email, scene: 'register', turnstile_token: human.token || undefined });
       setCooldown(60);
       toast.success('验证码已发送，请查看邮箱');
+      human.reset();
     } catch (err) {
+      human.reset();
       const msg = err instanceof ApiError ? err.message : '验证码发送失败';
       toast.error(msg);
     } finally {
@@ -75,18 +83,24 @@ export default function RegisterPage() {
   };
 
   const onSubmit = async (values: FormValues) => {
+    if (human.isRequired && !human.token) {
+      toast.error('请先完成人机验证');
+      return;
+    }
     try {
       const resp = await authApi.register({
         account: values.account,
         password: values.password,
         code: values.code,
         invite_code: values.invite_code || undefined,
+        turnstile_token: human.token || undefined,
       });
       setToken(resp.token);
       await refreshMe();
       toast.success('注册成功，已为你登录');
       navigate('/create/image', { replace: true });
     } catch (err) {
+      human.reset();
       const msg = err instanceof ApiError ? err.message : '注册失败，请重试';
       toast.error(msg);
     }
@@ -121,12 +135,14 @@ export default function RegisterPage() {
               autoComplete="one-time-code"
               {...register('code')}
             />
-            <button className="btn btn-outline btn-lg shrink-0" type="button" disabled={sendingCode || cooldown > 0 || !emailValue} onClick={sendCode}>
+            <button className="btn btn-outline btn-lg shrink-0" type="button" disabled={sendingCode || cooldown > 0 || !emailValue || human.isLoading || !human.isSatisfied} onClick={sendCode}>
               {cooldown > 0 ? `${cooldown}s` : sendingCode ? '发送中…' : '获取验证码'}
             </button>
           </div>
           {errors.code && <p className="field-error">{errors.code.message}</p>}
         </div>
+
+        {human.element}
 
         <div className="field">
           <label className="field-label">设置密码</label>
@@ -158,7 +174,7 @@ export default function RegisterPage() {
           <p className="field-hint">使用邀请码注册可获得额外赠点。</p>
         </div>
 
-        <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={isSubmitting}>
+        <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={isSubmitting || human.isLoading || !human.isSatisfied}>
           {isSubmitting ? '创建中…' : '创 建 账 号'}
         </button>
 

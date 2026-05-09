@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, Cloud, CreditCard, Database, GitBranch, Mail, RefreshCw, Save, ShieldAlert, Trash2, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Cloud, CreditCard, Database, GitBranch, Mail, RefreshCw, Save, ShieldAlert, ShieldCheck, Trash2, XCircle } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { ApiError } from '../../lib/api';
@@ -50,6 +50,10 @@ interface FormState {
   smtp_from_name: string;
   smtp_use_ssl: boolean;
   smtp_use_starttls: boolean;
+  turnstile_enabled: boolean;
+  turnstile_site_key: string;
+  turnstile_secret_key: string;
+  turnstile_allowed_hostnames: string;
 }
 
 const DEFAULT_FORM: FormState = {
@@ -94,6 +98,10 @@ const DEFAULT_FORM: FormState = {
   smtp_from_name: 'DAPO达波显影',
   smtp_use_ssl: true,
   smtp_use_starttls: false,
+  turnstile_enabled: false,
+  turnstile_site_key: '',
+  turnstile_secret_key: '',
+  turnstile_allowed_hostnames: '',
 };
 
 const DEFAULT_ROUTE_TEST: ProviderRouteTestReq = {
@@ -153,6 +161,10 @@ function fromSettings(s: SystemSettings | undefined): FormState {
     smtp_from_name: asStr(s['smtp.from_name'], 'DAPO达波显影'),
     smtp_use_ssl: asBool(s['smtp.use_ssl'], true),
     smtp_use_starttls: asBool(s['smtp.use_starttls']),
+    turnstile_enabled: asBool(s['security.turnstile.enabled']),
+    turnstile_site_key: asStr(s['security.turnstile.site_key']),
+    turnstile_secret_key: asStr(s['security.turnstile.secret_key']),
+    turnstile_allowed_hostnames: asStr(s['security.turnstile.allowed_hostnames']),
   };
 }
 
@@ -199,6 +211,10 @@ function toPayload(f: FormState): Partial<SystemSettings> {
     'smtp.from_name': f.smtp_from_name.trim(),
     'smtp.use_ssl': f.smtp_use_ssl,
     'smtp.use_starttls': f.smtp_use_starttls,
+    'security.turnstile.enabled': f.turnstile_enabled,
+    'security.turnstile.site_key': f.turnstile_site_key.trim(),
+    'security.turnstile.secret_key': f.turnstile_secret_key.trim(),
+    'security.turnstile.allowed_hostnames': f.turnstile_allowed_hostnames.trim(),
   };
 }
 
@@ -311,6 +327,13 @@ export default function ConfigPage() {
             <NumberField label="请求超时（秒）" value={form.retry_timeout_seconds} min={30} onChange={(v) => set('retry_timeout_seconds', v)} />
             <NumberField label="熔断失败次数" value={form.tolerance_circuit_failures} min={1} onChange={(v) => set('tolerance_circuit_failures', v)} />
             <NumberField label="熔断冷却时间（秒）" value={form.tolerance_circuit_cooldown_seconds} min={30} onChange={(v) => set('tolerance_circuit_cooldown_seconds', v)} />
+          </Section>
+
+          <Section icon={<ShieldCheck size={18} />} title="人机验证" desc="为登录、注册、邮箱验证码和找回密码启用 Cloudflare Turnstile。">
+            <Toggle label="启用 Turnstile" checked={form.turnstile_enabled} onChange={(v) => set('turnstile_enabled', v)} />
+            <TextField label="Site Key" value={form.turnstile_site_key} onChange={(v) => set('turnstile_site_key', v)} placeholder="前端公开 key" />
+            <TextField label="Secret Key" value={form.turnstile_secret_key} onChange={(v) => set('turnstile_secret_key', v)} type="password" />
+            <TextField label="允许域名" value={form.turnstile_allowed_hostnames} onChange={(v) => set('turnstile_allowed_hostnames', v)} placeholder="www.dapo-ai.com, wtvdaonwgoaa.usw-1.sealos.app" />
           </Section>
 
           <Section className="2xl:col-span-2" icon={<GitBranch size={18} />} title="模型路由" desc="配置图片、文字、视频模型进入哪个上游账号池，并控制轮询策略和认证类型。">
@@ -550,6 +573,8 @@ function readinessCategoryLabel(category: string) {
       return '基础运行';
     case 'smtp':
       return '邮箱验证码';
+    case 'human_verification':
+      return '人机验证';
     case 'payment':
       return '支付宝支付';
     case 'provider_routes':

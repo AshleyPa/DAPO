@@ -44,6 +44,10 @@ const (
 	SettingSMTPFromName        = "smtp.from_name"
 	SettingSMTPUseSSL          = "smtp.use_ssl"
 	SettingSMTPUseStartTLS     = "smtp.use_starttls"
+	SettingTurnstileEnabled    = "security.turnstile.enabled"
+	SettingTurnstileSiteKey    = "security.turnstile.site_key"
+	SettingTurnstileSecretKey  = "security.turnstile.secret_key"
+	SettingTurnstileHostnames  = "security.turnstile.allowed_hostnames"
 
 	MaskedSecretValue = "********"
 )

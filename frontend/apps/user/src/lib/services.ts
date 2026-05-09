@@ -8,6 +8,7 @@ import type {
   CreateTextBody,
   CreateVideoBody,
   GenerationTask,
+  HumanVerificationConfig,
   LoginResp,
   MeResp,
   MessageResp,
@@ -24,13 +25,15 @@ import type {
 } from './types';
 
 export const authApi = {
-  register: (body: { account: string; password: string; code: string; invite_code?: string }) =>
+  humanVerificationConfig: () =>
+    request<HumanVerificationConfig>({ method: 'GET', url: '/public/human-verification' }),
+  register: (body: { account: string; password: string; code: string; invite_code?: string; turnstile_token?: string }) =>
     request<RegisterResp>({ method: 'POST', url: '/auth/register', data: body }),
-  login: (body: { account: string; password: string }) =>
+  login: (body: { account: string; password: string; turnstile_token?: string }) =>
     request<LoginResp>({ method: 'POST', url: '/auth/login', data: body }),
-  sendEmailCode: (body: { email: string; scene: 'register' | 'reset_password' }) =>
+  sendEmailCode: (body: { email: string; scene: 'register' | 'reset_password'; turnstile_token?: string }) =>
     request<MessageResp>({ method: 'POST', url: '/auth/email/code', data: body }),
-  resetPassword: (body: { email: string; code: string; password: string }) =>
+  resetPassword: (body: { email: string; code: string; password: string; turnstile_token?: string }) =>
     request<MessageResp>({ method: 'POST', url: '/auth/password/reset', data: body }),
   refresh: (refresh_token: string) =>
     request<TokenPair>({ method: 'POST', url: '/auth/refresh', data: { refresh_token } }),

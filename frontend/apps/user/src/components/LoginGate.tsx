@@ -7,6 +7,7 @@ import clsx from 'clsx';
 
 import { ApiError } from '../lib/api';
 import { authApi } from '../lib/services';
+import { useHumanVerification } from './HumanVerification';
 import { useAuthStore } from '../stores/auth';
 import { useLoginGateStore } from '../stores/loginGate';
 import { toast } from '../stores/toast';
@@ -137,6 +138,7 @@ export function LoginGate() {
 function LoginForm({ onDone }: { onDone: () => void }) {
   const setToken = useAuthStore((s) => s.setToken);
   const refreshMe = useAuthStore((s) => s.refreshMe);
+  const human = useHumanVerification('auth');
 
   const {
     register,
@@ -148,13 +150,18 @@ function LoginForm({ onDone }: { onDone: () => void }) {
   });
 
   const onSubmit = async (v: LoginValues) => {
+    if (human.isRequired && !human.token) {
+      toast.error('请先完成人机验证');
+      return;
+    }
     try {
-      const resp = await authApi.login({ account: v.account, password: v.password });
+      const resp = await authApi.login({ account: v.account, password: v.password, turnstile_token: human.token || undefined });
       setToken(resp.token);
       await refreshMe();
       toast.success('登录成功');
       onDone();
     } catch (err) {
+      human.reset();
       toast.error(err instanceof ApiError ? err.message : '登录失败，请重试');
     }
   };
@@ -180,7 +187,8 @@ function LoginForm({ onDone }: { onDone: () => void }) {
         />
         {errors.password && <p className="field-error">{errors.password.message}</p>}
       </div>
-      <button className="btn btn-primary btn-lg btn-block h-14 text-[17px]" type="submit" disabled={isSubmitting}>
+      {human.element}
+      <button className="btn btn-primary btn-lg btn-block h-14 text-[17px]" type="submit" disabled={isSubmitting || human.isLoading || !human.isSatisfied}>
         {isSubmitting ? '登录中...' : '登录'}
       </button>
       <div className="text-right">
@@ -193,6 +201,7 @@ function LoginForm({ onDone }: { onDone: () => void }) {
 function RegisterForm({ onDone }: { onDone: () => void }) {
   const setToken = useAuthStore((s) => s.setToken);
   const refreshMe = useAuthStore((s) => s.refreshMe);
+  const human = useHumanVerification('auth');
 
   const {
     register,
@@ -220,12 +229,18 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
       toast.error('请先填写有效邮箱');
       return;
     }
+    if (human.isRequired && !human.token) {
+      toast.error('请先完成人机验证');
+      return;
+    }
     try {
       setSendingCode(true);
-      await authApi.sendEmailCode({ email, scene: 'register' });
+      await authApi.sendEmailCode({ email, scene: 'register', turnstile_token: human.token || undefined });
       setCooldown(60);
       toast.success('验证码已发送，请查看邮箱');
+      human.reset();
     } catch (err) {
+      human.reset();
       toast.error(err instanceof ApiError ? err.message : '验证码发送失败');
     } finally {
       setSendingCode(false);
@@ -233,18 +248,24 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
   };
 
   const onSubmit = async (v: RegisterValues) => {
+    if (human.isRequired && !human.token) {
+      toast.error('请先完成人机验证');
+      return;
+    }
     try {
       const resp = await authApi.register({
         account: v.account,
         password: v.password,
         code: v.code,
         invite_code: v.invite_code || undefined,
+        turnstile_token: human.token || undefined,
       });
       setToken(resp.token);
       await refreshMe();
       toast.success('注册成功，已为你登录');
       onDone();
     } catch (err) {
+      human.reset();
       toast.error(err instanceof ApiError ? err.message : '注册失败，请重试');
     }
   };
@@ -272,7 +293,7 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
           <button
             className="btn btn-outline h-14 shrink-0 rounded-2xl px-4 text-[14px]"
             type="button"
-            disabled={sendingCode || cooldown > 0 || !emailValue}
+            disabled={sendingCode || cooldown > 0 || !emailValue || human.isLoading || !human.isSatisfied}
             onClick={sendCode}
           >
             {cooldown > 0 ? `${cooldown}s` : sendingCode ? '发送中' : '获取验证码'}
@@ -303,7 +324,8 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
       <div className="field">
         <input className="input h-14 rounded-2xl text-[15px] font-normal placeholder:font-normal" placeholder="邀请码（选填）" {...register('invite_code')} />
       </div>
-      <button className="btn btn-primary btn-lg btn-block h-14 text-[17px]" type="submit" disabled={isSubmitting}>
+      {human.element}
+      <button className="btn btn-primary btn-lg btn-block h-14 text-[17px]" type="submit" disabled={isSubmitting || human.isLoading || !human.isSatisfied}>
         {isSubmitting ? '创建中...' : '创建账号'}
       </button>
     </form>

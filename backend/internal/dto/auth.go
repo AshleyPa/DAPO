@@ -3,16 +3,18 @@ package dto
 
 // RegisterReq 注册请求。
 type RegisterReq struct {
-	Account    string `json:"account"     binding:"required,min=3,max=128"` // DAPO V2 注册要求邮箱
-	Password   string `json:"password"    binding:"required,min=8,max=64"`
-	Code       string `json:"code"        binding:"required,len=6"` // 邮箱验证码
-	InviteCode string `json:"invite_code" binding:"omitempty,max=16"`
+	Account        string `json:"account"         binding:"required,min=3,max=128"` // DAPO V2 注册要求邮箱
+	Password       string `json:"password"        binding:"required,min=8,max=64"`
+	Code           string `json:"code"            binding:"required,len=6"` // 邮箱验证码
+	InviteCode     string `json:"invite_code"     binding:"omitempty,max=16"`
+	TurnstileToken string `json:"turnstile_token" binding:"omitempty,max=2048"`
 }
 
 // LoginReq 登录请求。
 type LoginReq struct {
-	Account  string `json:"account"  binding:"required,min=3,max=128"`
-	Password string `json:"password" binding:"required,min=6,max=64"`
+	Account        string `json:"account"         binding:"required,min=3,max=128"`
+	Password       string `json:"password"        binding:"required,min=6,max=64"`
+	TurnstileToken string `json:"turnstile_token" binding:"omitempty,max=2048"`
 }
 
 // RefreshReq 刷新请求。
@@ -28,15 +30,17 @@ type ChangePasswordReq struct {
 
 // SendEmailCodeReq 发送邮箱验证码。
 type SendEmailCodeReq struct {
-	Email string `json:"email" binding:"required,email,max=128"`
-	Scene string `json:"scene" binding:"required,oneof=register reset_password"`
+	Email          string `json:"email"           binding:"required,email,max=128"`
+	Scene          string `json:"scene"           binding:"required,oneof=register reset_password"`
+	TurnstileToken string `json:"turnstile_token" binding:"omitempty,max=2048"`
 }
 
 // ResetPasswordReq 找回密码。
 type ResetPasswordReq struct {
-	Email    string `json:"email"    binding:"required,email,max=128"`
-	Code     string `json:"code"     binding:"required,len=6"`
-	Password string `json:"password" binding:"required,min=8,max=64"`
+	Email          string `json:"email"           binding:"required,email,max=128"`
+	Code           string `json:"code"            binding:"required,len=6"`
+	Password       string `json:"password"        binding:"required,min=8,max=64"`
+	TurnstileToken string `json:"turnstile_token" binding:"omitempty,max=2048"`
 }
 
 // TokenPair 颁发的 token 对。

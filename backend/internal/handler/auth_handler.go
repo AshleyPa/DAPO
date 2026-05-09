@@ -13,13 +13,23 @@ import (
 
 // AuthHandler 用户端 auth handler。
 type AuthHandler struct {
-	auth *service.AuthService
-	user *service.UserService
+	auth  *service.AuthService
+	user  *service.UserService
+	human *service.HumanVerificationService
 }
 
 // NewAuthHandler 构造。
-func NewAuthHandler(a *service.AuthService, u *service.UserService) *AuthHandler {
-	return &AuthHandler{auth: a, user: u}
+func NewAuthHandler(a *service.AuthService, u *service.UserService, human *service.HumanVerificationService) *AuthHandler {
+	return &AuthHandler{auth: a, user: u, human: human}
+}
+
+// HumanVerificationConfig GET /api/v1/public/human-verification
+func (h *AuthHandler) HumanVerificationConfig(c *gin.Context) {
+	if h.human == nil {
+		response.OK(c, service.HumanVerificationPublicConfig{})
+		return
+	}
+	response.OK(c, h.human.PublicConfig(c.Request.Context()))
 }
 
 // Register POST /api/v1/auth/register
@@ -28,6 +38,12 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.InvalidParam.Wrap(err))
 		return
+	}
+	if h.human != nil {
+		if err := h.human.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, service.TurnstileActionAuth, c.ClientIP(), c.Request.Host); err != nil {
+			response.Fail(c, err)
+			return
+		}
 	}
 	u, tok, err := h.auth.Register(c.Request.Context(), &req, c.ClientIP())
 	if err != nil {
@@ -49,6 +65,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		response.Fail(c, errcode.InvalidParam.Wrap(err))
 		return
 	}
+	if h.human != nil {
+		if err := h.human.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, service.TurnstileActionAuth, c.ClientIP(), c.Request.Host); err != nil {
+			response.Fail(c, err)
+			return
+		}
+	}
 	u, tok, err := h.auth.Login(c.Request.Context(), &req, c.ClientIP())
 	if err != nil {
 		response.Fail(c, err)
@@ -68,6 +90,12 @@ func (h *AuthHandler) SendEmailCode(c *gin.Context) {
 		response.Fail(c, errcode.InvalidParam.Wrap(err))
 		return
 	}
+	if h.human != nil {
+		if err := h.human.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, service.TurnstileActionAuth, c.ClientIP(), c.Request.Host); err != nil {
+			response.Fail(c, err)
+			return
+		}
+	}
 	if err := h.auth.SendEmailCode(c.Request.Context(), &req, c.ClientIP()); err != nil {
 		response.Fail(c, err)
 		return
@@ -81,6 +109,12 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.InvalidParam.Wrap(err))
 		return
+	}
+	if h.human != nil {
+		if err := h.human.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, service.TurnstileActionAuth, c.ClientIP(), c.Request.Host); err != nil {
+			response.Fail(c, err)
+			return
+		}
 	}
 	if err := h.auth.ResetPassword(c.Request.Context(), &req); err != nil {
 		response.Fail(c, err)

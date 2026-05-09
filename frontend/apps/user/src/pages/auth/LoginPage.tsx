@@ -6,6 +6,7 @@ import clsx from 'clsx';
 
 import { ApiError } from '../../lib/api';
 import { authApi } from '../../lib/services';
+import { useHumanVerification } from '../../components/HumanVerification';
 import { useAuthStore } from '../../stores/auth';
 import { toast } from '../../stores/toast';
 
@@ -22,6 +23,7 @@ export default function LoginPage() {
   const location = useLocation();
   const setToken = useAuthStore((s) => s.setToken);
   const refreshMe = useAuthStore((s) => s.refreshMe);
+  const human = useHumanVerification('auth');
 
   const {
     register,
@@ -33,14 +35,19 @@ export default function LoginPage() {
   });
 
   const onSubmit = async (values: FormValues) => {
+    if (human.isRequired && !human.token) {
+      toast.error('请先完成人机验证');
+      return;
+    }
     try {
-      const resp = await authApi.login({ account: values.account, password: values.password });
+      const resp = await authApi.login({ account: values.account, password: values.password, turnstile_token: human.token || undefined });
       setToken(resp.token);
       await refreshMe();
       toast.success('登录成功');
       const from = (location.state as { from?: string } | null)?.from ?? '/create/image';
       navigate(from, { replace: true });
     } catch (err) {
+      human.reset();
       const msg = err instanceof ApiError ? err.message : '登录失败，请重试';
       toast.error(msg);
     }
@@ -88,7 +95,9 @@ export default function LoginPage() {
           <Link to="/forgot" className="text-klein-500 hover:underline">忘记密码?</Link>
         </div>
 
-        <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={isSubmitting}>
+        {human.element}
+
+        <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={isSubmitting || human.isLoading || !human.isSatisfied}>
           {isSubmitting ? '登录中…' : '登 录'}
         </button>
 

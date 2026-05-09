@@ -36,6 +36,15 @@ export interface LoginResp {
   token: TokenPair;
 }
 
+export type HumanVerificationAction = 'auth';
+
+export interface HumanVerificationConfig {
+  turnstile: {
+    enabled: boolean;
+    site_key: string;
+  };
+}
+
 export interface MeResp {
   uid: number;
   uuid: string;

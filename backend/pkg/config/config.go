@@ -27,6 +27,7 @@ type Config struct {
 	Billing   Billing   `mapstructure:"billing"`
 	CDN       CDN       `mapstructure:"cdn"`
 	SMTP      SMTP      `mapstructure:"smtp"`
+	Turnstile Turnstile `mapstructure:"turnstile"`
 	AESKey    string    `mapstructure:"-"` // 来自环境变量
 }
 
@@ -123,6 +124,14 @@ type SMTP struct {
 	UseSSL      bool          `mapstructure:"use_ssl"`
 	UseStartTLS bool          `mapstructure:"use_starttls"`
 	Timeout     time.Duration `mapstructure:"timeout"`
+}
+
+type Turnstile struct {
+	Enabled          bool          `mapstructure:"enabled"`
+	SiteKey          string        `mapstructure:"site_key"`
+	SecretKey        string        `mapstructure:"-"`
+	AllowedHostnames []string      `mapstructure:"allowed_hostnames"`
+	Timeout          time.Duration `mapstructure:"timeout"`
 }
 
 var (
@@ -231,6 +240,12 @@ func loadInternal() (*Config, error) {
 	mapEnv(&out.SMTP.FromName, "KLEIN_SMTP_FROM_NAME")
 	mapEnvBool(&out.SMTP.UseSSL, "KLEIN_SMTP_USE_SSL")
 	mapEnvBool(&out.SMTP.UseStartTLS, "KLEIN_SMTP_USE_STARTTLS")
+	mapEnvBool(&out.Turnstile.Enabled, "KLEIN_TURNSTILE_ENABLED")
+	mapEnv(&out.Turnstile.SiteKey, "KLEIN_TURNSTILE_SITE_KEY")
+	mapEnv(&out.Turnstile.SecretKey, "KLEIN_TURNSTILE_SECRET_KEY")
+	if hosts := os.Getenv("KLEIN_TURNSTILE_ALLOWED_HOSTNAMES"); hosts != "" {
+		out.Turnstile.AllowedHostnames = splitAndTrim(hosts, ",")
+	}
 
 	if origins := os.Getenv("KLEIN_CORS_ORIGINS"); origins != "" {
 		out.CORS.Origins = splitAndTrim(origins, ",")
