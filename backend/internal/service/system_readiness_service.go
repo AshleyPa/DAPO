@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,7 +31,7 @@ func NewSystemReadinessService(cfg *config.Config, sys *SystemConfigService) *Sy
 func (s *SystemReadinessService) Check(ctx context.Context) (*dto.AdminSystemReadinessResp, error) {
 	checks := make([]dto.AdminSystemReadinessCheck, 0, 24)
 	checks = append(checks, s.runtimeChecks()...)
-	checks = append(checks, s.smtpChecks()...)
+	checks = append(checks, s.smtpChecks(ctx)...)
 	checks = append(checks, s.paymentChecks(ctx)...)
 	checks = append(checks, s.providerRouteChecks(ctx)...)
 	checks = append(checks, s.storageChecks(ctx)...)
@@ -80,22 +81,28 @@ func (s *SystemReadinessService) runtimeChecks() []dto.AdminSystemReadinessCheck
 	return checks
 }
 
-func (s *SystemReadinessService) smtpChecks() []dto.AdminSystemReadinessCheck {
+func (s *SystemReadinessService) smtpChecks(ctx context.Context) []dto.AdminSystemReadinessCheck {
 	cfg := config.SMTP{}
 	if s.cfg != nil {
 		cfg = s.cfg.SMTP
 	}
+	host, hostSource := s.effectiveSMTPString(ctx, "KLEIN_SMTP_HOST", SettingSMTPHost, cfg.Host)
+	port, portSource := s.effectiveSMTPInt(ctx, "KLEIN_SMTP_PORT", SettingSMTPPort, int64(cfg.Port))
+	username, usernameSource := s.effectiveSMTPString(ctx, "KLEIN_SMTP_USERNAME", SettingSMTPUsername, cfg.Username)
+	password, passwordSource := s.effectiveSMTPString(ctx, "KLEIN_SMTP_PASSWORD", SettingSMTPPassword, cfg.Password)
+	fromEmail, fromEmailSource := s.effectiveSMTPString(ctx, "KLEIN_SMTP_FROM_EMAIL", SettingSMTPFromEmail, cfg.FromEmail)
+	fromName, fromNameSource := s.effectiveSMTPString(ctx, "KLEIN_SMTP_FROM_NAME", SettingSMTPFromName, cfg.FromName)
 	checks := []dto.AdminSystemReadinessCheck{
-		requiredCheck("smtp", "host", "SMTP Host", strings.TrimSpace(cfg.Host) != "", "已配置 SMTP Host", "缺少 KLEIN_SMTP_HOST，无法发送注册/找回密码验证码", smtpSource("KLEIN_SMTP_HOST")),
-		requiredCheck("smtp", "port", "SMTP Port", cfg.Port > 0, "已配置 SMTP Port", "缺少或错误的 KLEIN_SMTP_PORT", smtpSource("KLEIN_SMTP_PORT")),
-		requiredCheck("smtp", "username", "发件账号", strings.TrimSpace(cfg.Username) != "", "已配置发件账号", "缺少 KLEIN_SMTP_USERNAME", smtpSource("KLEIN_SMTP_USERNAME")),
-		requiredCheck("smtp", "password", "邮箱三方密码", strings.TrimSpace(cfg.Password) != "", "已配置邮箱三方密码", "缺少 KLEIN_SMTP_PASSWORD，验证码邮件会发送失败", smtpSource("KLEIN_SMTP_PASSWORD")),
-		requiredCheck("smtp", "from_email", "发件邮箱", strings.TrimSpace(cfg.FromEmail) != "", "已配置发件邮箱", "缺少 KLEIN_SMTP_FROM_EMAIL", smtpSource("KLEIN_SMTP_FROM_EMAIL")),
+		requiredCheck("smtp", "host", "SMTP Host", strings.TrimSpace(host) != "", "已配置 SMTP Host", "缺少 KLEIN_SMTP_HOST 或 smtp.host，无法发送注册/找回密码验证码", hostSource),
+		requiredCheck("smtp", "port", "SMTP Port", port > 0, "已配置 SMTP Port", "缺少或错误的 KLEIN_SMTP_PORT / smtp.port", portSource),
+		requiredCheck("smtp", "username", "发件账号", strings.TrimSpace(username) != "", "已配置发件账号", "缺少 KLEIN_SMTP_USERNAME 或 smtp.username", usernameSource),
+		requiredCheck("smtp", "password", "邮箱三方密码", strings.TrimSpace(password) != "", "已配置邮箱三方密码", "缺少 KLEIN_SMTP_PASSWORD 或 smtp.password，验证码邮件会发送失败", passwordSource),
+		requiredCheck("smtp", "from_email", "发件邮箱", strings.TrimSpace(fromEmail) != "", "已配置发件邮箱", "缺少 KLEIN_SMTP_FROM_EMAIL 或 smtp.from_email", fromEmailSource),
 	}
-	if strings.TrimSpace(cfg.FromName) == "" {
-		checks = append(checks, warnCheck("smtp", "from_name", "发件名称", "未配置 KLEIN_SMTP_FROM_NAME，邮件发件展示不完整", smtpSource("KLEIN_SMTP_FROM_NAME"), false))
+	if strings.TrimSpace(fromName) == "" {
+		checks = append(checks, warnCheck("smtp", "from_name", "发件名称", "未配置 KLEIN_SMTP_FROM_NAME 或 smtp.from_name，邮件发件展示不完整", fromNameSource, false))
 	} else {
-		checks = append(checks, okCheck("smtp", "from_name", "发件名称", "已配置发件名称", smtpSource("KLEIN_SMTP_FROM_NAME"), false))
+		checks = append(checks, okCheck("smtp", "from_name", "发件名称", "已配置发件名称", fromNameSource, false))
 	}
 	return checks
 }
@@ -236,6 +243,39 @@ func (s *SystemReadinessService) effectiveBool(ctx context.Context, envKey, conf
 	return fallback, "missing"
 }
 
+func (s *SystemReadinessService) effectiveSMTPString(ctx context.Context, envKey, configKey, fallback string) (string, string) {
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		return value, "env"
+	}
+	if s.sys != nil {
+		if value := strings.TrimSpace(s.sys.GetString(ctx, configKey, "")); value != "" {
+			return value, "system_config"
+		}
+	}
+	if strings.TrimSpace(fallback) != "" {
+		return fallback, "config"
+	}
+	return "", "missing"
+}
+
+func (s *SystemReadinessService) effectiveSMTPInt(ctx context.Context, envKey, configKey string, fallback int64) (int64, string) {
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		if n, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return n, "env"
+		}
+		return 0, "env"
+	}
+	if s.sys != nil {
+		if value := s.sys.GetInt(ctx, configKey, 0); value > 0 {
+			return value, "system_config"
+		}
+	}
+	if fallback > 0 {
+		return fallback, "config"
+	}
+	return 0, "missing"
+}
+
 func requiredCheck(category, key, label string, ok bool, okMsg, errMsg, source string) dto.AdminSystemReadinessCheck {
 	if ok {
 		return okCheck(category, key, label, okMsg, source, true)
@@ -260,13 +300,6 @@ func warnCheck(category, key, label, message, source string, required bool) dto.
 
 func errorCheck(category, key, label, message, source string, required bool) dto.AdminSystemReadinessCheck {
 	return dto.AdminSystemReadinessCheck{Category: category, Key: key, Label: label, Status: readinessError, Message: message, Source: source, Required: required}
-}
-
-func smtpSource(envKey string) string {
-	if strings.TrimSpace(os.Getenv(envKey)) != "" {
-		return "env"
-	}
-	return "config"
 }
 
 func missingSource(fallback string) string {

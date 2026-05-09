@@ -15,7 +15,6 @@ import (
 	"github.com/kleinai/backend/internal/repo"
 	"github.com/kleinai/backend/internal/service"
 	"github.com/kleinai/backend/pkg/jwtx"
-	"github.com/kleinai/backend/pkg/mailer"
 )
 
 // MountAPI 在 root 上挂载用户端 /api/v1 全部业务路由。
@@ -42,13 +41,13 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 	emailCodeRepo := repo.NewEmailVerificationRepo(deps.DB)
 	rechargeRepo := repo.NewRechargeRepo(deps.DB)
 
-	emailVerifier := service.NewEmailVerificationService(emailCodeRepo, userRepo, mailer.New(deps.Cfg.SMTP))
+	sysCfgSvc := service.NewSystemConfigService(sysCfgRepo)
+	emailVerifier := service.NewEmailVerificationService(emailCodeRepo, userRepo, deps.Cfg.SMTP, sysCfgSvc)
 	authSvc := service.NewAuthService(deps.DB, userRepo, deps.JWT, emailVerifier)
 	userSvc := service.NewUserService(userRepo)
 	keySvc := service.NewAPIKeyService(apiKeyRepo)
 	billingSvc := service.NewBillingService(deps.DB, walletRepo)
 	cdkSvc := service.NewCDKService(deps.DB, billingSvc)
-	sysCfgSvc := service.NewSystemConfigService(sysCfgRepo)
 	rechargeSvc := service.NewRechargeService(deps.DB, rechargeRepo, sysCfgSvc)
 	proxySvc := service.NewProxyService(proxyRepo, deps.AES)
 	promptGallerySvc := service.NewPromptGalleryService(promptGalleryRepo)

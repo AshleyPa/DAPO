@@ -36,6 +36,14 @@ const (
 	SettingGrokCFBrowser       = "grok.cf.browser"
 	SettingGrokCFLastError     = "grok.cf.last_error"
 	SettingGrokCFLastRefreshAt = "grok.cf.last_refresh_at"
+	SettingSMTPHost            = "smtp.host"
+	SettingSMTPPort            = "smtp.port"
+	SettingSMTPUsername        = "smtp.username"
+	SettingSMTPPassword        = "smtp.password"
+	SettingSMTPFromEmail       = "smtp.from_email"
+	SettingSMTPFromName        = "smtp.from_name"
+	SettingSMTPUseSSL          = "smtp.use_ssl"
+	SettingSMTPUseStartTLS     = "smtp.use_starttls"
 
 	MaskedSecretValue = "********"
 )

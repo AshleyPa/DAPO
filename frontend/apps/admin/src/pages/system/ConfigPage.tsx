@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, Cloud, CreditCard, Database, GitBranch, RefreshCw, Save, ShieldAlert, Trash2, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Cloud, CreditCard, Database, GitBranch, Mail, RefreshCw, Save, ShieldAlert, Trash2, XCircle } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { ApiError } from '../../lib/api';
@@ -42,6 +42,14 @@ interface FormState {
   alipay_subject_prefix: string;
   wechat_mch_id: string;
   wechat_api_v3_key: string;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_username: string;
+  smtp_password: string;
+  smtp_from_email: string;
+  smtp_from_name: string;
+  smtp_use_ssl: boolean;
+  smtp_use_starttls: boolean;
 }
 
 const DEFAULT_FORM: FormState = {
@@ -78,6 +86,14 @@ const DEFAULT_FORM: FormState = {
   alipay_subject_prefix: 'DAPO达波显影-',
   wechat_mch_id: '',
   wechat_api_v3_key: '',
+  smtp_host: 'smtp.qiye.aliyun.com',
+  smtp_port: 465,
+  smtp_username: '',
+  smtp_password: '',
+  smtp_from_email: '',
+  smtp_from_name: 'DAPO达波显影',
+  smtp_use_ssl: true,
+  smtp_use_starttls: false,
 };
 
 const DEFAULT_ROUTE_TEST: ProviderRouteTestReq = {
@@ -129,6 +145,14 @@ function fromSettings(s: SystemSettings | undefined): FormState {
     alipay_subject_prefix: asStr(s['payment.alipay_subject_prefix'], 'DAPO达波显影-'),
     wechat_mch_id: asStr(s['payment.wechat_mch_id']),
     wechat_api_v3_key: asStr(s['payment.wechat_api_v3_key']),
+    smtp_host: asStr(s['smtp.host'], 'smtp.qiye.aliyun.com'),
+    smtp_port: asNum(s['smtp.port'], 465),
+    smtp_username: asStr(s['smtp.username']),
+    smtp_password: asStr(s['smtp.password']),
+    smtp_from_email: asStr(s['smtp.from_email']),
+    smtp_from_name: asStr(s['smtp.from_name'], 'DAPO达波显影'),
+    smtp_use_ssl: asBool(s['smtp.use_ssl'], true),
+    smtp_use_starttls: asBool(s['smtp.use_starttls']),
   };
 }
 
@@ -167,6 +191,14 @@ function toPayload(f: FormState): Partial<SystemSettings> {
     'payment.alipay_subject_prefix': f.alipay_subject_prefix.trim(),
     'payment.wechat_mch_id': f.wechat_mch_id.trim(),
     'payment.wechat_api_v3_key': f.wechat_api_v3_key.trim(),
+    'smtp.host': f.smtp_host.trim(),
+    'smtp.port': Number(f.smtp_port) || 465,
+    'smtp.username': f.smtp_username.trim(),
+    'smtp.password': f.smtp_password.trim(),
+    'smtp.from_email': f.smtp_from_email.trim(),
+    'smtp.from_name': f.smtp_from_name.trim(),
+    'smtp.use_ssl': f.smtp_use_ssl,
+    'smtp.use_starttls': f.smtp_use_starttls,
   };
 }
 
@@ -235,7 +267,7 @@ export default function ConfigPage() {
       <header className="page-header">
         <div>
           <h1 className="page-title">系统配置</h1>
-          <p className="page-subtitle">维护运行容错、刷新存储、OSS 和支付通道基础参数。</p>
+          <p className="page-subtitle">维护运行容错、邮箱验证码、刷新存储、OSS 和支付通道基础参数。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button className="btn btn-outline btn-md" onClick={() => settings.refetch()} disabled={settings.isFetching}>
@@ -258,6 +290,21 @@ export default function ConfigPage() {
           onRefresh={() => readiness.refetch()}
         />
         <div className="grid gap-4 xl:grid-cols-2">
+          <Section icon={<Mail size={18} />} title="邮箱验证码" desc="配置注册和找回密码验证码的 SMTP 发信参数。">
+            <div className="grid gap-3 md:grid-cols-2">
+              <TextField label="SMTP Host" value={form.smtp_host} onChange={(v) => set('smtp_host', v)} placeholder="smtp.qiye.aliyun.com" />
+              <NumberField label="SMTP Port" value={form.smtp_port} min={1} max={65535} onChange={(v) => set('smtp_port', v)} />
+              <TextField label="发件账号" value={form.smtp_username} onChange={(v) => set('smtp_username', v)} placeholder="sender@example.com" />
+              <TextField label="邮箱三方密码" value={form.smtp_password} onChange={(v) => set('smtp_password', v)} type="password" />
+              <TextField label="发件邮箱" value={form.smtp_from_email} onChange={(v) => set('smtp_from_email', v)} placeholder="sender@example.com" />
+              <TextField label="发件名称" value={form.smtp_from_name} onChange={(v) => set('smtp_from_name', v)} placeholder="DAPO达波显影" />
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Toggle label="启用 SSL" checked={form.smtp_use_ssl} onChange={(v) => set('smtp_use_ssl', v)} />
+              <Toggle label="启用 STARTTLS" checked={form.smtp_use_starttls} onChange={(v) => set('smtp_use_starttls', v)} />
+            </div>
+          </Section>
+
           <Section icon={<ShieldAlert size={18} />} title="重试与容错" desc="控制生成请求失败后的重试次数、超时和账号熔断策略。">
             <NumberField label="最大重试次数" value={form.retry_max_attempts} min={0} max={10} onChange={(v) => set('retry_max_attempts', v)} />
             <NumberField label="重试基础延迟（毫秒）" value={form.retry_base_delay_ms} min={0} onChange={(v) => set('retry_base_delay_ms', v)} />

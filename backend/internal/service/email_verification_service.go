@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"math/big"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/kleinai/backend/internal/dto"
 	"github.com/kleinai/backend/internal/model"
 	"github.com/kleinai/backend/internal/repo"
+	"github.com/kleinai/backend/pkg/config"
 	"github.com/kleinai/backend/pkg/crypto"
 	"github.com/kleinai/backend/pkg/errcode"
 	"github.com/kleinai/backend/pkg/logger"
@@ -22,13 +25,14 @@ import (
 const verificationTTL = 10 * time.Minute
 
 type EmailVerificationService struct {
-	codes  *repo.EmailVerificationRepo
-	users  *repo.UserRepo
-	mailer *mailer.Mailer
+	codes    *repo.EmailVerificationRepo
+	users    *repo.UserRepo
+	baseSMTP config.SMTP
+	sys      *SystemConfigService
 }
 
-func NewEmailVerificationService(codes *repo.EmailVerificationRepo, users *repo.UserRepo, mailer *mailer.Mailer) *EmailVerificationService {
-	return &EmailVerificationService{codes: codes, users: users, mailer: mailer}
+func NewEmailVerificationService(codes *repo.EmailVerificationRepo, users *repo.UserRepo, smtpCfg config.SMTP, sys *SystemConfigService) *EmailVerificationService {
+	return &EmailVerificationService{codes: codes, users: users, baseSMTP: smtpCfg, sys: sys}
 }
 
 func (s *EmailVerificationService) SendCode(ctx context.Context, req *dto.SendEmailCodeReq, ip string) error {
@@ -36,7 +40,8 @@ func (s *EmailVerificationService) SendCode(ctx context.Context, req *dto.SendEm
 	if err != nil {
 		return err
 	}
-	if s.mailer == nil || s.mailer.Disabled() {
+	m := mailer.New(s.effectiveSMTP(ctx))
+	if m.Disabled() {
 		return errcode.Internal.WithMsg("邮件服务未配置")
 	}
 	if scene == model.EmailVerificationSceneRegister {
@@ -96,7 +101,7 @@ func (s *EmailVerificationService) SendCode(ctx context.Context, req *dto.SendEm
 		return errcode.DBError.Wrap(err)
 	}
 	subject, html := mailer.RenderVerificationCode(scene, code, int(verificationTTL/time.Minute))
-	if err := s.mailer.Send(ctx, mailer.Message{To: email, Subject: subject, HTML: html}); err != nil {
+	if err := m.Send(ctx, mailer.Message{To: email, Subject: subject, HTML: html}); err != nil {
 		if expireErr := s.codes.MarkExpired(ctx, row.ID, time.Now().UTC()); expireErr != nil {
 			logger.FromCtx(ctx).Warn("email_verification.expire_after_send_failed_failed", zap.String("email", email), zap.String("scene", scene), zap.Error(expireErr))
 		}
@@ -104,6 +109,51 @@ func (s *EmailVerificationService) SendCode(ctx context.Context, req *dto.SendEm
 		return errcode.Internal.WithMsg("验证码邮件发送失败")
 	}
 	return nil
+}
+
+func (s *EmailVerificationService) effectiveSMTP(ctx context.Context) config.SMTP {
+	cfg := s.baseSMTP
+	cfg.Host = s.smtpString(ctx, "KLEIN_SMTP_HOST", SettingSMTPHost, cfg.Host)
+	cfg.Port = s.smtpInt(ctx, "KLEIN_SMTP_PORT", SettingSMTPPort, cfg.Port)
+	cfg.Username = s.smtpString(ctx, "KLEIN_SMTP_USERNAME", SettingSMTPUsername, cfg.Username)
+	cfg.Password = s.smtpString(ctx, "KLEIN_SMTP_PASSWORD", SettingSMTPPassword, cfg.Password)
+	cfg.FromEmail = s.smtpString(ctx, "KLEIN_SMTP_FROM_EMAIL", SettingSMTPFromEmail, cfg.FromEmail)
+	cfg.FromName = s.smtpString(ctx, "KLEIN_SMTP_FROM_NAME", SettingSMTPFromName, cfg.FromName)
+	cfg.UseSSL = s.smtpBool(ctx, "KLEIN_SMTP_USE_SSL", SettingSMTPUseSSL, cfg.UseSSL)
+	cfg.UseStartTLS = s.smtpBool(ctx, "KLEIN_SMTP_USE_STARTTLS", SettingSMTPUseStartTLS, cfg.UseStartTLS)
+	return cfg
+}
+
+func (s *EmailVerificationService) smtpString(ctx context.Context, envKey, configKey, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		return value
+	}
+	if s.sys != nil {
+		return s.sys.GetString(ctx, configKey, fallback)
+	}
+	return fallback
+}
+
+func (s *EmailVerificationService) smtpInt(ctx context.Context, envKey, configKey string, fallback int) int {
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		if n, err := strconv.Atoi(value); err == nil {
+			return n
+		}
+	}
+	if s.sys != nil {
+		return int(s.sys.GetInt(ctx, configKey, int64(fallback)))
+	}
+	return fallback
+}
+
+func (s *EmailVerificationService) smtpBool(ctx context.Context, envKey, configKey string, fallback bool) bool {
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		return envBool(value)
+	}
+	if s.sys != nil {
+		return s.sys.GetBool(ctx, configKey, fallback)
+	}
+	return fallback
 }
 
 func (s *EmailVerificationService) ConsumeTx(ctx context.Context, tx *gorm.DB, email, scene, code string) error {
