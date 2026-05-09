@@ -118,6 +118,7 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 				getOrderHandlers = append([]gin.HandlerFunc{middleware.RateLimitUser(deps.Limiter, 20)}, getOrderHandlers...)
 			}
 			bill.GET("/recharge/orders/:order_no", getOrderHandlers...)
+			bill.POST("/recharge/orders/:order_no/cancel", billH.CancelRechargeOrder)
 		}
 
 		gen := authed.Group("/gen")

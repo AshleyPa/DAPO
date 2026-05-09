@@ -81,6 +81,8 @@ export const billingApi = {
     }),
   rechargeOrder: (orderNo: string) =>
     request<RechargeOrder>({ method: 'GET', url: `/billing/recharge/orders/${orderNo}` }),
+  cancelRechargeOrder: (orderNo: string) =>
+    request<RechargeOrder>({ method: 'POST', url: `/billing/recharge/orders/${orderNo}/cancel` }),
   logs: (page = 1, pageSize = 20) =>
     request<PageData<WalletLog>>({
       method: 'GET',

@@ -113,6 +113,17 @@ func (h *BillingHandler) GetRechargeOrder(c *gin.Context) {
 	response.OK(c, row)
 }
 
+// CancelRechargeOrder POST /api/v1/billing/recharge/orders/:order_no/cancel
+func (h *BillingHandler) CancelRechargeOrder(c *gin.Context) {
+	uid := middleware.MustUID(c)
+	row, err := h.recharge.CancelUserOrder(c.Request.Context(), uid, c.Param("order_no"))
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, row)
+}
+
 // RechargeOrders GET /api/v1/billing/recharge/orders
 func (h *BillingHandler) RechargeOrders(c *gin.Context) {
 	uid := middleware.MustUID(c)

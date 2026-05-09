@@ -20,6 +20,7 @@ interface PriceRow {
 
 const DEFAULT_ROWS: PriceRow[] = [
   { model_code: 'gpt-4o-mini', name: '文字对话', kind: 'text', provider: 'gpt', upstream_model: 'gpt-4o-mini', unit_points: 0, input_unit_points: 1, output_unit_points: 3, enabled: true },
+  { model_code: 'gpt-image-2', name: 'GPT Image 2', kind: 'image', provider: 'gpt', upstream_model: 'gpt-image-2', unit_points: 4, enabled: true },
   { model_code: 'img-v3', name: '通用图片', kind: 'image', provider: 'gpt', upstream_model: 'gpt-image', unit_points: 4, enabled: true },
   { model_code: 'img-real', name: '真实图片', kind: 'image', provider: 'gpt', upstream_model: 'gpt-image-real', unit_points: 4, enabled: true },
   { model_code: 'img-anime', name: '动漫图片', kind: 'image', provider: 'gpt', upstream_model: 'gpt-image-anime', unit_points: 3, enabled: true },
@@ -29,8 +30,13 @@ const DEFAULT_ROWS: PriceRow[] = [
 ];
 
 function fromValue(v: unknown): PriceRow[] {
+  const withRequiredRows = (rows: PriceRow[]) => {
+    const seen = new Set(rows.map((row) => row.model_code));
+    const missing = DEFAULT_ROWS.filter((row) => row.model_code === 'gpt-image-2' && !seen.has(row.model_code));
+    return missing.length > 0 ? [...rows, ...missing] : rows;
+  };
   if (Array.isArray(v)) {
-    return v.map((r) => {
+    return withRequiredRows(v.map((r) => {
       const row = r as Partial<PriceRow>;
       return {
         model_code: String(row.model_code || ''),
@@ -43,10 +49,10 @@ function fromValue(v: unknown): PriceRow[] {
         output_unit_points: Number(row.output_unit_points || 0) / 100,
         enabled: row.enabled !== false,
       };
-    });
+    }));
   }
   if (v && typeof v === 'object') {
-    return Object.entries(v as Record<string, number>).map(([model_code, price]) => ({
+    return withRequiredRows(Object.entries(v as Record<string, number>).map(([model_code, price]) => ({
       model_code,
       name: model_code,
       kind: model_code.startsWith('vid') ? 'video' : model_code.startsWith('gpt') ? 'text' : 'image',
@@ -56,7 +62,7 @@ function fromValue(v: unknown): PriceRow[] {
       input_unit_points: model_code.startsWith('gpt') ? Number(price || 0) / 100 : 0,
       output_unit_points: model_code.startsWith('gpt') ? Number(price || 0) / 100 : 0,
       enabled: true,
-    }));
+    })));
   }
   return DEFAULT_ROWS;
 }

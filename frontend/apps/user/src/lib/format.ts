@@ -41,11 +41,12 @@ const BIZ_LABEL: Record<string, string> = {
   cdk: 'CDK 兑换',
   promo: '优惠码',
   invite: '邀请奖励',
-  refund: '失败退款',
+  refund: '失败退回',
   consume: '消费',
-  freeze: '冻结',
-  unfreeze: '解冻',
+  freeze: '创作预扣',
+  unfreeze: '预扣退回',
   grant: '系统赠点',
+  admin_adjust: '人工调整',
 };
 
 export function fmtBiz(biz: string): string {

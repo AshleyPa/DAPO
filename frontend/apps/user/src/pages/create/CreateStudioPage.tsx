@@ -47,7 +47,7 @@ const GENERATING_PHRASES = [
 ];
 
 const IMAGE_MODELS = [
-  { code: 'gpt-image-2', label: 'GPT Image 2', cost: 0 },
+  { code: 'gpt-image-2', label: 'GPT Image 2', cost: 4 },
 ];
 
 type SelectModel = {

@@ -206,6 +206,71 @@ func (s *RechargeService) GetUserOrder(ctx context.Context, userID uint64, order
 	return orderResp(row), nil
 }
 
+func (s *RechargeService) CancelUserOrder(ctx context.Context, userID uint64, orderNo string) (*dto.RechargeOrderResp, error) {
+	row, err := s.repo.GetUserOrder(ctx, userID, strings.TrimSpace(orderNo))
+	if err != nil {
+		if err == repo.ErrNotFound {
+			return nil, errcode.ResourceMissing
+		}
+		return nil, errcode.DBError.Wrap(err)
+	}
+	row, err = s.refreshPendingAlipayOrder(ctx, row)
+	if err != nil {
+		return nil, err
+	}
+	switch row.Status {
+	case model.RechargeStatusCanceled, model.RechargeStatusExpired, model.RechargeStatusFailed:
+		return orderResp(row), nil
+	case model.RechargeStatusPaid:
+		return nil, errcode.InvalidParam.WithMsg("订单已支付，不能取消")
+	}
+	if row.Status != model.RechargeStatusPending {
+		return orderResp(row), nil
+	}
+
+	extra := map[string]any{
+		"cancelled_at": time.Now().UTC().Format(time.RFC3339),
+		"cancelled_by": "user",
+	}
+	if row.Channel == model.RechargeChannelAlipay {
+		client, err := s.alipayClient(ctx)
+		if err != nil {
+			return nil, errcode.Internal.WithMsg("支付宝订单取消失败，请稍后重试")
+		}
+		if !client.Enabled() {
+			return nil, errcode.Forbidden.WithMsg("支付宝未配置完整")
+		}
+		closeRes, err := client.Close(ctx, row.OrderNo)
+		if err != nil {
+			logger.FromCtx(ctx).Warn("alipay.cancel.close_failed", zap.String("order_no", row.OrderNo), zap.Error(err))
+			return nil, errcode.Internal.WithMsg("支付宝订单取消失败，请稍后重试")
+		}
+		extra["alipay_close_at"] = time.Now().UTC().Format(time.RFC3339)
+		extra["alipay_close_out_trade_no"] = closeRes.OutTradeNo
+		extra["alipay_close_trade_no"] = closeRes.TradeNo
+	}
+
+	merged := mergeExtra(row.Extra, extra)
+	affected, err := s.repo.UpdateIfStatus(ctx, row.ID, model.RechargeStatusPending, map[string]any{
+		"status": model.RechargeStatusCanceled,
+		"extra":  merged,
+	})
+	if err != nil {
+		return nil, errcode.DBError.Wrap(err)
+	}
+	if affected == 0 {
+		refreshed, err := s.repo.GetByOrderNo(ctx, row.OrderNo)
+		if err != nil {
+			return nil, errcode.DBError.Wrap(err)
+		}
+		return orderResp(refreshed), nil
+	}
+	row.Status = model.RechargeStatusCanceled
+	row.Extra = &merged
+	row.UpdatedAt = time.Now().UTC()
+	return orderResp(row), nil
+}
+
 func (s *RechargeService) ListUserOrders(ctx context.Context, userID uint64, page, pageSize int) ([]*dto.RechargeOrderResp, int64, error) {
 	rows, total, err := s.repo.ListUserOrders(ctx, userID, page, pageSize)
 	if err != nil {

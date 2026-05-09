@@ -13,7 +13,7 @@ import (
 // 单位：点 *100。例：400 = 4 点 / 张图。
 var DefaultPriceTable = map[string]int64{
 	"gpt-4o-mini":        100,
-	"gpt-image-2":        0,
+	"gpt-image-2":        400,
 	"vid-v1":             1500, // 4 秒视频
 	"vid-i2v":            2000,
 	"grok-imagine-video": 2000,

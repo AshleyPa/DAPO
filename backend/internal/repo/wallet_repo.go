@@ -299,7 +299,9 @@ func (r *WalletRepo) ListUserLogs(ctx context.Context, userID uint64, page, page
 	if pageSize <= 0 || pageSize > 200 {
 		pageSize = 20
 	}
-	q := r.db.WithContext(ctx).Model(&model.WalletLog{}).Where("user_id = ?", userID)
+	q := r.db.WithContext(ctx).Model(&model.WalletLog{}).
+		Where("user_id = ?", userID).
+		Where("biz_type NOT IN ?", []string{"freeze", "unfreeze"})
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err

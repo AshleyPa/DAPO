@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import QRCode from 'qrcode';
-import { CheckCircle2, Copy, Gift, QrCode, RefreshCw, Sparkles, Wallet } from 'lucide-react';
+import { CheckCircle2, Copy, Gift, QrCode, RefreshCw, Sparkles, Wallet, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { ApiError } from '../../lib/api';
@@ -48,6 +48,18 @@ export default function BillingPage() {
       toast.success('支付宝订单已创建');
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : '下单失败'),
+  });
+
+  const cancelOrder = useMutation({
+    mutationFn: (orderNo: string) => billingApi.cancelRechargeOrder(orderNo),
+    onSuccess: async (order) => {
+      setActiveOrderNo(order.order_no);
+      qc.setQueryData(['billing.recharge.order', order.order_no], order);
+      toast.success('订单已取消');
+      await qc.invalidateQueries({ queryKey: ['billing.recharge.order', order.order_no] });
+      await qc.invalidateQueries({ queryKey: ['billing.recharge.orders'] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : '取消订单失败'),
   });
 
   const redeemMut = useMutation({
@@ -104,7 +116,7 @@ export default function BillingPage() {
 
   const stats = [
     { label: '可用点数', value: fmtPoints(me?.points ?? 0), accent: true },
-    { label: '冻结点数', value: fmtPoints(me?.frozen_points ?? 0) },
+    { label: '待结算点数', value: fmtPoints(me?.frozen_points ?? 0) },
     { label: '当前套餐', value: me?.plan_code?.toUpperCase() ?? 'FREE' },
     { label: '邀请码', value: me?.invite_code ?? '—' },
   ];
@@ -209,7 +221,13 @@ export default function BillingPage() {
           )}
         </div>
 
-        <PaymentPanel order={activeOrder} qrDataUrl={qrDataUrl} isFetching={orderQ.isFetching} />
+        <PaymentPanel
+          order={activeOrder}
+          qrDataUrl={qrDataUrl}
+          isFetching={orderQ.isFetching}
+          isCanceling={cancelOrder.isPending}
+          onCancel={(orderNo) => cancelOrder.mutate(orderNo)}
+        />
       </section>
 
       <section className="grid gap-4 mb-6 lg:grid-cols-2">
@@ -253,7 +271,7 @@ export default function BillingPage() {
             支付宝扫码完成后，页面会自动轮询订单状态；支付成功后点数会即时入账，并写入最近交易流水。
           </p>
           <p className="mt-3 text-small text-text-tertiary leading-loose">
-            冻结点数不会按时间自动释放，它只会在任务成功结算时转为已消费，或在任务失败、超时后自动退款解冻。
+            生成任务进行中会先暂扣点数；成功后记为消费，失败或超时会自动退回。
           </p>
         </div>
       </section>
@@ -322,7 +340,19 @@ export default function BillingPage() {
   );
 }
 
-function PaymentPanel({ order, qrDataUrl, isFetching }: { order?: RechargeOrder; qrDataUrl: string; isFetching: boolean }) {
+function PaymentPanel({
+  order,
+  qrDataUrl,
+  isFetching,
+  isCanceling,
+  onCancel,
+}: {
+  order?: RechargeOrder;
+  qrDataUrl: string;
+  isFetching: boolean;
+  isCanceling: boolean;
+  onCancel: (orderNo: string) => void;
+}) {
   if (!order) {
     return (
       <aside className="card card-section flex min-h-[360px] flex-col items-center justify-center text-center">
@@ -337,6 +367,7 @@ function PaymentPanel({ order, qrDataUrl, isFetching }: { order?: RechargeOrder;
     );
   }
   const paid = order.status === 1;
+  const pending = order.status === 0;
   return (
     <aside className="card card-section">
       <header className="section-header mb-4">
@@ -357,10 +388,17 @@ function PaymentPanel({ order, qrDataUrl, isFetching }: { order?: RechargeOrder;
               <p className="mt-3 font-semibold">支付成功</p>
             </div>
           </div>
-        ) : qrDataUrl ? (
+        ) : pending && qrDataUrl ? (
           <img src={qrDataUrl} alt="支付宝支付二维码" className="h-[248px] w-[248px]" />
-        ) : (
+        ) : pending ? (
           <div className="grid min-h-[248px] place-items-center text-small text-text-tertiary">二维码生成中...</div>
+        ) : (
+          <div className="grid min-h-[248px] place-items-center text-center text-text-tertiary">
+            <div>
+              <QrCode size={52} className="mx-auto opacity-50" />
+              <p className="mt-3 font-semibold">{statusText(order.status)}</p>
+            </div>
+          </div>
         )}
       </div>
 
@@ -371,10 +409,21 @@ function PaymentPanel({ order, qrDataUrl, isFetching }: { order?: RechargeOrder;
         <InfoRow label="创建时间" value={fmtTime(order.created_at)} />
       </div>
 
-      {!paid && (
-        <p className="mt-4 text-small text-text-tertiary">
-          {isFetching ? '正在确认支付状态...' : '支付后会自动刷新状态，也可以稍等几秒查看最近交易。'}
-        </p>
+      {pending && (
+        <div className="mt-4 flex flex-col gap-3">
+          <p className="text-small text-text-tertiary">
+            {isFetching ? '正在确认支付状态...' : '支付后会自动刷新状态，也可以稍等几秒查看最近交易。'}
+          </p>
+          <button
+            className="btn btn-outline btn-md w-full justify-center"
+            type="button"
+            disabled={isCanceling}
+            onClick={() => onCancel(order.order_no)}
+          >
+            <X size={16} />
+            {isCanceling ? '取消中...' : '取消订单'}
+          </button>
+        </div>
       )}
     </aside>
   );
