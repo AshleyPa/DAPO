@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -60,6 +61,19 @@ func (r *RechargeRepo) ListUserOrders(ctx context.Context, userID uint64, page, 
 	var rows []*model.RechargeRecord
 	err := q.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error
 	return rows, total, err
+}
+
+func (r *RechargeRepo) ListPendingByChannelBefore(ctx context.Context, channel string, before time.Time, limit int) ([]*model.RechargeRecord, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var rows []*model.RechargeRecord
+	err := r.db.WithContext(ctx).
+		Where("channel = ? AND status = ? AND created_at <= ?", channel, model.RechargeStatusPending, before).
+		Order("created_at ASC").
+		Limit(limit).
+		Find(&rows).Error
+	return rows, err
 }
 
 func (r *RechargeRepo) Update(ctx context.Context, id uint64, fields map[string]any) error {

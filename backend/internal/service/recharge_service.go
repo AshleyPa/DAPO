@@ -46,6 +46,14 @@ type RechargeService struct {
 	sys  *SystemConfigService
 }
 
+type RechargeReconcileStats struct {
+	Scanned   int
+	Paid      int
+	Expired   int
+	Unchanged int
+	Errors    int
+}
+
 type rechargePackage struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
@@ -208,6 +216,78 @@ func (s *RechargeService) ListUserOrders(ctx context.Context, userID uint64, pag
 		out = append(out, orderResp(row))
 	}
 	return out, total, nil
+}
+
+func (s *RechargeService) ReconcilePendingAlipayOrders(ctx context.Context, limit int) (*RechargeReconcileStats, error) {
+	stats := &RechargeReconcileStats{}
+	if s == nil || s.repo == nil {
+		return stats, fmt.Errorf("recharge service not initialized")
+	}
+	before := time.Now().UTC().Add(-1 * time.Minute)
+	rows, err := s.repo.ListPendingByChannelBefore(ctx, model.RechargeChannelAlipay, before, limit)
+	if err != nil {
+		return stats, errcode.DBError.Wrap(err)
+	}
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return stats, ctx.Err()
+		default:
+		}
+		stats.Scanned++
+		originalStatus := row.Status
+		refreshed, err := s.refreshPendingAlipayOrder(ctx, row)
+		if err != nil {
+			stats.Errors++
+			logger.FromCtx(ctx).Warn("alipay.reconcile.order_failed", zap.String("order_no", row.OrderNo), zap.Error(err))
+			continue
+		}
+		switch {
+		case refreshed == nil:
+			stats.Unchanged++
+		case refreshed.Status == model.RechargeStatusPaid && originalStatus != model.RechargeStatusPaid:
+			stats.Paid++
+		case refreshed.Status == model.RechargeStatusExpired && originalStatus != model.RechargeStatusExpired:
+			stats.Expired++
+		default:
+			stats.Unchanged++
+		}
+	}
+	return stats, nil
+}
+
+func (s *RechargeService) StartAlipayReconcileLoop(ctx context.Context, interval time.Duration, limit int) {
+	if s == nil || interval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				stats, err := s.ReconcilePendingAlipayOrders(ctx, limit)
+				if err != nil {
+					logger.FromCtx(ctx).Warn("alipay.reconcile.failed", zap.Error(err))
+					continue
+				}
+				if stats.Scanned > 0 || stats.Errors > 0 {
+					logger.FromCtx(ctx).Info("alipay.reconcile.done",
+						zap.Int("scanned", stats.Scanned),
+						zap.Int("paid", stats.Paid),
+						zap.Int("expired", stats.Expired),
+						zap.Int("unchanged", stats.Unchanged),
+						zap.Int("errors", stats.Errors),
+					)
+				}
+			}
+		}
+	}()
 }
 
 func (s *RechargeService) HandleAlipayNotify(ctx context.Context, form url.Values) (string, error) {

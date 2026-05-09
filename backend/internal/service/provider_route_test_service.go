@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,6 +14,17 @@ import (
 	"github.com/kleinai/backend/internal/repo"
 	"github.com/kleinai/backend/pkg/errcode"
 )
+
+var providerDiagnosticRedactions = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{regexp.MustCompile(`(?i)sk-[A-Za-z0-9._~+\-/=]{8,}`), "[redacted]"},
+	{regexp.MustCompile(`(?i)sess-[A-Za-z0-9._~+\-/=]{8,}`), "[redacted]"},
+	{regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+\-/=]{8,}`), `${1}[redacted]`},
+	{regexp.MustCompile(`(?i)(\b(?:access_token|refresh_token|id_token|authorization|cookie|api[_-]?key|token|secret|password|session|sess)["']?\s*[:=]\s*["']?)[^\s"'&,}]+`), `${1}[redacted]`},
+	{regexp.MustCompile(`(?i)(\b(?:access_token|refresh_token|id_token|api[_-]?key|token|secret|password|session|sess)=)[^&\s]+`), `${1}[redacted]`},
+}
 
 // ProviderRouteTestService dry-runs provider.routes for admin diagnostics.
 type ProviderRouteTestService struct {
@@ -236,14 +248,9 @@ func safeProviderDiagnosticText(v string) string {
 	if v == "" {
 		return ""
 	}
-	fields := strings.Fields(v)
-	for i, field := range fields {
-		lower := strings.ToLower(field)
-		if strings.HasPrefix(lower, "sk-") || strings.HasPrefix(lower, "sess-") || strings.HasPrefix(lower, "bearer") {
-			fields[i] = "[redacted]"
-		}
+	for _, rule := range providerDiagnosticRedactions {
+		v = rule.re.ReplaceAllString(v, rule.repl)
 	}
-	v = strings.Join(fields, " ")
 	const maxLen = 220
 	if len(v) <= maxLen {
 		return v

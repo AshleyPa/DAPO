@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -250,5 +251,18 @@ func TestBuildProviderHealthSummaryGroupsAuthAndErrors(t *testing.T) {
 	}
 	if len(p.RecentErrors) != 1 || p.RecentErrors[0].AccountID != 42 || p.RecentErrors[0].LastError != lastErr {
 		t.Fatalf("unexpected error samples: %#v", p.RecentErrors)
+	}
+}
+
+func TestSafeProviderDiagnosticTextRedactsStructuredSecrets(t *testing.T) {
+	raw := `upstream failed {"access_token":"sk-live-secret-token","cookie":"sess-abcdef1234567890"} https://api.example.com?api_key=secret123456&ok=1 Authorization: Bearer abc.def.ghi`
+	got := safeProviderDiagnosticText(raw)
+	for _, leaked := range []string{"sk-live-secret-token", "sess-abcdef1234567890", "secret123456", "abc.def.ghi"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("safeProviderDiagnosticText leaked %q in %q", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "[redacted]") {
+		t.Fatalf("expected redacted marker, got %q", got)
 	}
 }

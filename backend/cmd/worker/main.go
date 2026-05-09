@@ -6,8 +6,12 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"go.uber.org/zap"
@@ -41,10 +45,18 @@ func main() {
 		logger.L().Fatal("worker requires redis")
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	if deps.DB != nil {
 		sysCfgSvc := service.NewSystemConfigService(repo.NewSystemConfigRepo(deps.DB))
 		proxySvc := service.NewProxyService(repo.NewProxyRepo(deps.DB), deps.AES)
-		service.NewGrokCFRefreshService(sysCfgSvc, proxySvc).Start(context.Background())
+		service.NewGrokCFRefreshService(sysCfgSvc, proxySvc).Start(ctx)
+		rechargeSvc := service.NewRechargeService(deps.DB, repo.NewRechargeRepo(deps.DB), sysCfgSvc)
+		rechargeSvc.StartAlipayReconcileLoop(ctx,
+			envDuration("KLEIN_ALIPAY_RECONCILE_INTERVAL", 2*time.Minute),
+			envInt("KLEIN_ALIPAY_RECONCILE_LIMIT", 100),
+		)
 	}
 
 	srv := asynq.NewServer(
@@ -86,8 +98,6 @@ func main() {
 
 	logger.L().Info("worker started", zap.String("redis", deps.Cfg.Redis.Addr))
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	<-ctx.Done()
 
 	srv.Shutdown()
@@ -102,3 +112,29 @@ func (a *asynqZap) Info(args ...any)  { a.l.Sugar().Info(args...) }
 func (a *asynqZap) Warn(args ...any)  { a.l.Sugar().Warn(args...) }
 func (a *asynqZap) Error(args ...any) { a.l.Sugar().Error(args...) }
 func (a *asynqZap) Fatal(args ...any) { a.l.Sugar().Fatal(args...) }
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	if d, err := time.ParseDuration(value); err == nil {
+		return d
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return time.Duration(seconds) * time.Second
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return n
+}

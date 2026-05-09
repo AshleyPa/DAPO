@@ -166,6 +166,9 @@ func (c *Client) Precreate(ctx context.Context, in PrecreateInput) (*PrecreateRe
 	if response.Code != "10000" {
 		return nil, apiError("precreate", response.Code, response.Msg, response.SubCode, response.SubMsg)
 	}
+	if err := ensureResponseOutTradeNo("precreate", in.OutTradeNo, response.OutTradeNo); err != nil {
+		return nil, err
+	}
 	if response.QRCode == "" {
 		return nil, errors.New("alipay: empty qr_code")
 	}
@@ -216,6 +219,9 @@ func (c *Client) Query(ctx context.Context, outTradeNo string) (*TradeQueryResul
 	if response.Code != "10000" {
 		return nil, apiError("query", response.Code, response.Msg, response.SubCode, response.SubMsg)
 	}
+	if err := ensureResponseOutTradeNo("query", outTradeNo, response.OutTradeNo); err != nil {
+		return nil, err
+	}
 	buyerID := response.BuyerUserID
 	if buyerID == "" {
 		buyerID = response.BuyerID
@@ -261,6 +267,9 @@ func (c *Client) Close(ctx context.Context, outTradeNo string) (*TradeCloseResul
 	}
 	if response.Code != "10000" {
 		return nil, apiError("close", response.Code, response.Msg, response.SubCode, response.SubMsg)
+	}
+	if err := ensureResponseOutTradeNo("close", outTradeNo, response.OutTradeNo); err != nil {
+		return nil, err
 	}
 	return &TradeCloseResult{OutTradeNo: response.OutTradeNo, TradeNo: response.TradeNo}, nil
 }
@@ -466,6 +475,15 @@ func apiError(op, code, msg, subCode, subMsg string) error {
 		text = code
 	}
 	return fmt.Errorf("alipay: %s failed: %s", op, text)
+}
+
+func ensureResponseOutTradeNo(op, want, got string) error {
+	want = strings.TrimSpace(want)
+	got = strings.TrimSpace(got)
+	if got == "" || want == "" || got == want {
+		return nil
+	}
+	return fmt.Errorf("alipay: %s out_trade_no mismatch got=%s want=%s", op, got, want)
 }
 
 func amountYuan(fen int64) string {

@@ -95,6 +95,27 @@ func TestPrecreateRejectsInvalidResponseSignature(t *testing.T) {
 	}
 }
 
+func TestPrecreateRejectsOutTradeNoMismatch(t *testing.T) {
+	appKey := mustRSAKey(t)
+	alipayKey := mustRSAKey(t)
+
+	client := newTestClient(t, appKey, &alipayKey.PublicKey, func(r *http.Request) (*http.Response, error) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		response := `{"code":"10000","msg":"Success","out_trade_no":"R2","trade_no":"T1","qr_code":"https://qr.example"}`
+		sign := signWithKey(t, alipayKey, response)
+		return jsonResponse(fmt.Sprintf(`{"alipay_trade_precreate_response":%s,"sign":%q}`, response, sign)), nil
+	})
+
+	_, err := client.Precreate(context.Background(), PrecreateInput{
+		OutTradeNo: "R1",
+		Subject:    "测试充值",
+		AmountFen:  1000,
+	})
+	if err == nil || !strings.Contains(err.Error(), "out_trade_no mismatch") {
+		t.Fatalf("Precreate() error = %v, want out_trade_no mismatch", err)
+	}
+}
+
 func TestQueryVerifiesResponseSignatureAndParsesStatus(t *testing.T) {
 	appKey := mustRSAKey(t)
 	alipayKey := mustRSAKey(t)
@@ -125,6 +146,23 @@ func TestQueryVerifiesResponseSignatureAndParsesStatus(t *testing.T) {
 	}
 }
 
+func TestQueryRejectsOutTradeNoMismatch(t *testing.T) {
+	appKey := mustRSAKey(t)
+	alipayKey := mustRSAKey(t)
+
+	client := newTestClient(t, appKey, &alipayKey.PublicKey, func(r *http.Request) (*http.Response, error) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		response := `{"code":"10000","msg":"Success","out_trade_no":"R2","trade_no":"T1","trade_status":"TRADE_SUCCESS","total_amount":"10.00"}`
+		sign := signWithKey(t, alipayKey, response)
+		return jsonResponse(fmt.Sprintf(`{"alipay_trade_query_response":%s,"sign":%q}`, response, sign)), nil
+	})
+
+	_, err := client.Query(context.Background(), "R1")
+	if err == nil || !strings.Contains(err.Error(), "out_trade_no mismatch") {
+		t.Fatalf("Query() error = %v, want out_trade_no mismatch", err)
+	}
+}
+
 func TestCloseVerifiesResponseSignature(t *testing.T) {
 	appKey := mustRSAKey(t)
 	alipayKey := mustRSAKey(t)
@@ -152,6 +190,23 @@ func TestCloseVerifiesResponseSignature(t *testing.T) {
 	}
 	if got.OutTradeNo != "R1" || got.TradeNo != "T1" {
 		t.Fatalf("Close() = %+v", got)
+	}
+}
+
+func TestCloseRejectsOutTradeNoMismatch(t *testing.T) {
+	appKey := mustRSAKey(t)
+	alipayKey := mustRSAKey(t)
+
+	client := newTestClient(t, appKey, &alipayKey.PublicKey, func(r *http.Request) (*http.Response, error) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		response := `{"code":"10000","msg":"Success","out_trade_no":"R2","trade_no":"T1"}`
+		sign := signWithKey(t, alipayKey, response)
+		return jsonResponse(fmt.Sprintf(`{"alipay_trade_close_response":%s,"sign":%q}`, response, sign)), nil
+	})
+
+	_, err := client.Close(context.Background(), "R1")
+	if err == nil || !strings.Contains(err.Error(), "out_trade_no mismatch") {
+		t.Fatalf("Close() error = %v, want out_trade_no mismatch", err)
 	}
 }
 
