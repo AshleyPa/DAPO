@@ -18,15 +18,15 @@ server {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
 
-    location /api/ {
+    location ^~ /api/ {
         proxy_pass ${API_UPSTREAM};
     }
 
-    location /admin/api/ {
+    location ^~ /admin/api/ {
         proxy_pass ${ADMIN_UPSTREAM};
     }
 
-    location /v1/ {
+    location ^~ /v1/ {
         proxy_pass ${OPENAI_UPSTREAM};
     }
 
