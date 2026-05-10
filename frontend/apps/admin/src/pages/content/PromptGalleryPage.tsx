@@ -56,9 +56,9 @@ export default function PromptGalleryPage() {
     queryFn: () =>
       promptGalleryApi.list({
         keyword: keyword.trim() || undefined,
-        modality,
+        modality: modality || undefined,
         category: category.trim() || undefined,
-        status: status === '' ? '' : (Number(status) as 0 | 1),
+        status: status === '' ? undefined : (Number(status) as 0 | 1),
         page,
         page_size: pageSize,
       }),
@@ -67,6 +67,10 @@ export default function PromptGalleryPage() {
   const rows = query.data?.list ?? [];
   const total = query.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / pageSize));
+  const queryError =
+    query.error instanceof ApiError || query.error instanceof Error
+      ? query.error.message
+      : '快捷提示词列表加载失败';
 
   const save = useMutation({
     mutationFn: (f: FormState) => {
@@ -214,7 +218,10 @@ export default function PromptGalleryPage() {
                 </td>
               </tr>
             ))}
-            {!query.isLoading && rows.length === 0 && (
+            {query.isError && (
+              <tr><td colSpan={8} className="py-10 text-center text-danger-600">{queryError}</td></tr>
+            )}
+            {!query.isLoading && !query.isError && rows.length === 0 && (
               <tr><td colSpan={8} className="py-10 text-center text-text-tertiary">暂无快捷提示词</td></tr>
             )}
           </tbody>
