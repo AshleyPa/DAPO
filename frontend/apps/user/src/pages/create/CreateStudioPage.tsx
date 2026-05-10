@@ -18,8 +18,6 @@ import {
 import clsx from 'clsx';
 
 import BorderGlow from '../../components/reactbits/BorderGlow';
-import CircularGallery from '../../components/reactbits/CircularGallery';
-import Galaxy from '../../components/reactbits/Galaxy';
 import { useEnsureLoggedIn } from '../../hooks/useEnsureLoggedIn';
 import { ApiError } from '../../lib/api';
 import { fmtRelative } from '../../lib/format';
@@ -29,6 +27,8 @@ import { useAuthStore } from '../../stores/auth';
 import { toast } from '../../stores/toast';
 
 type StudioMode = 'image' | 'text' | 'video';
+const Galaxy = lazy(() => import('../../components/reactbits/Galaxy'));
+const CircularGallery = lazy(() => import('../../components/reactbits/CircularGallery'));
 const ASCIIText = lazy(() => import('../../components/reactbits/ASCIIText'));
 
 type PromptGalleryCard = {
@@ -216,7 +216,7 @@ export default function CreateStudioPage() {
   const refreshMe = useAuthStore((s) => s.refreshMe);
   const token = useAuthStore((s) => s.token);
   const motionProfile = useStudioMotionProfile();
-  const compactMotion = motionProfile.isMobile || motionProfile.prefersReducedMotion || motionProfile.isConstrained;
+  const compactMotion = !motionProfile.supportsRichEffects;
 
   const modelCatalog = useQuery({
     queryKey: ['gen.models'],
@@ -435,22 +435,28 @@ export default function CreateStudioPage() {
   return (
     <div className={clsx('dapo-studio relative min-h-screen overflow-x-hidden bg-black text-white', compactMotion && 'dapo-studio--compact-motion')}>
       <div className="dapo-galaxy-layer" aria-hidden="true">
-        <Galaxy
-          mouseRepulsion={!compactMotion}
-          mouseInteraction={!compactMotion}
-          density={compactMotion ? 0.56 : 1}
-          glowIntensity={compactMotion ? 0.28 : 0.4}
-          saturation={compactMotion ? 0.12 : 0.2}
-          hueShift={30}
-          twinkleIntensity={compactMotion ? 0.12 : 0.3}
-          rotationSpeed={compactMotion ? 0.025 : 0.1}
-          repulsionStrength={compactMotion ? 0 : 2}
-          autoCenterRepulsion={0}
-          starSpeed={compactMotion ? 0.26 : 0.5}
-          speed={compactMotion ? 0.55 : 1}
-          frameRate={compactMotion ? 24 : 60}
-          dpr={compactMotion ? 0.75 : 1}
-        />
+        {motionProfile.supportsRichEffects ? (
+          <Suspense fallback={null}>
+            <Galaxy
+              mouseRepulsion
+              mouseInteraction
+              density={1}
+              glowIntensity={0.4}
+              saturation={0.2}
+              hueShift={30}
+              twinkleIntensity={0.3}
+              rotationSpeed={0.1}
+              repulsionStrength={2}
+              autoCenterRepulsion={0}
+              starSpeed={0.5}
+              speed={1}
+              frameRate={60}
+              dpr={1}
+            />
+          </Suspense>
+        ) : (
+          <LightweightGalaxy />
+        )}
       </div>
 
       <div className="relative z-10 mx-auto w-full max-w-[1500px] px-4 pb-14 pt-5 sm:px-6 lg:px-10">
@@ -464,7 +470,7 @@ export default function CreateStudioPage() {
             maxAttachments={maxAttachments}
             expectedCost={expectedCost}
             inProgress={!!inProgress}
-            compactMotion={compactMotion}
+            supportsRichEffects={motionProfile.supportsRichEffects}
             onOpen={setPreview}
           />
 
@@ -483,7 +489,7 @@ export default function CreateStudioPage() {
             >
               <div className="dapo-composer-card p-4 text-white sm:p-5">
               <div className="mb-5 flex flex-col gap-2">
-                <PromptGalleryRail cards={promptGalleryCards} compactMotion={compactMotion} onPick={fillPromptFromCard} />
+                <PromptGalleryRail cards={promptGalleryCards} compactMotion={compactMotion} supportsRichEffects={motionProfile.supportsRichEffects} onPick={fillPromptFromCard} />
               </div>
 
               <div className="dapo-prompt-panel rounded-[8px] border border-[#d7dde5] bg-[#fbfcfd] p-3 sm:p-4">
@@ -641,7 +647,7 @@ function DevelopmentStage({
   maxAttachments,
   expectedCost,
   inProgress,
-  compactMotion,
+  supportsRichEffects,
   onOpen,
 }: {
   mode: StudioMode;
@@ -652,7 +658,7 @@ function DevelopmentStage({
   maxAttachments: number;
   expectedCost: string | number;
   inProgress: boolean;
-  compactMotion: boolean;
+  supportsRichEffects: boolean;
   onOpen: (preview: { url: string; type: 'image' | 'video'; title: string }) => void;
 }) {
   const activeItem = task;
@@ -716,11 +722,9 @@ function DevelopmentStage({
             <div className="relative min-h-[390px] w-full">
               <GeneratingDots />
             </div>
-          ) : compactMotion ? (
-            <MobileStageTitle />
-          ) : (
+          ) : supportsRichEffects ? (
             <div className="dapo-ascii-stage">
-              <Suspense fallback={null}>
+              <Suspense fallback={<MobileStageTitle />}>
                 <ASCIIText
                   text="让每一个灵感显影"
                   enableWaves
@@ -734,6 +738,8 @@ function DevelopmentStage({
                 />
               </Suspense>
             </div>
+          ) : (
+            <MobileStageTitle />
           )}
         </div>
       </div>
@@ -744,7 +750,10 @@ function DevelopmentStage({
 function MobileStageTitle() {
   return (
     <div className="dapo-mobile-title-stage" aria-label="让每一个灵感显影">
-      <span>让每一个灵感显影</span>
+      <span className="dapo-mobile-title-main" aria-hidden="true">
+        <span>让每一个</span>
+        <span>灵感显影</span>
+      </span>
     </div>
   );
 }
@@ -784,7 +793,7 @@ function ParameterStrip({
   );
 }
 
-function PromptGalleryRail({ cards, compactMotion, onPick }: { cards: PromptGalleryCard[]; compactMotion: boolean; onPick: (card: PromptGalleryCard) => void }) {
+function PromptGalleryRail({ cards, compactMotion, supportsRichEffects, onPick }: { cards: PromptGalleryCard[]; compactMotion: boolean; supportsRichEffects: boolean; onPick: (card: PromptGalleryCard) => void }) {
   const items = useMemo(
     () =>
       cards.map((card, index) => ({
@@ -813,40 +822,62 @@ function PromptGalleryRail({ cards, compactMotion, onPick }: { cards: PromptGall
         <p className="text-[13px] text-white/68">快捷提示词</p>
         <p className="hidden text-[12px] text-white/42 sm:block">横向滑动查看</p>
       </div>
-      <CircularGallery
-        items={items}
-        bend={-1}
-        borderRadius={0.11}
-        scrollSpeed={2.3}
-        scrollEase={0.04}
-        textColor="#ffffff"
-        font={compactMotion ? 'bold 22px Figtree' : 'bold 30px Figtree'}
-        frameRate={compactMotion ? 24 : 60}
-        dpr={compactMotion ? 1 : 1.5}
-        antialias={!compactMotion}
-        widthSegments={compactMotion ? 20 : 100}
-        heightSegments={compactMotion ? 12 : 50}
-        onSelect={handleSelect}
-      />
+      {supportsRichEffects ? (
+        <Suspense fallback={<LitePromptGallery items={items} onSelect={handleSelect} />}>
+          <CircularGallery
+            items={items}
+            bend={-1}
+            borderRadius={0.11}
+            scrollSpeed={2.3}
+            scrollEase={0.04}
+            textColor="#ffffff"
+            font={compactMotion ? 'bold 22px Figtree' : 'bold 30px Figtree'}
+            frameRate={60}
+            dpr={1.5}
+            antialias
+            widthSegments={100}
+            heightSegments={50}
+            onSelect={handleSelect}
+          />
+        </Suspense>
+      ) : (
+        <LitePromptGallery items={items} onSelect={handleSelect} />
+      )}
     </div>
   );
 }
 
 function useStudioMotionProfile() {
+  type Profile = {
+    isMobile: boolean;
+    prefersReducedMotion: boolean;
+    isConstrained: boolean;
+    isWebKitRisk: boolean;
+    supportsRichEffects: boolean;
+  };
+
   const getProfile = () => {
     if (typeof window === 'undefined') {
-      return { isMobile: false, prefersReducedMotion: false, isConstrained: false };
+      return { isMobile: false, prefersReducedMotion: false, isConstrained: false, isWebKitRisk: false, supportsRichEffects: true };
     }
     const width = window.innerWidth || 1440;
     const coarse = window.matchMedia('(pointer: coarse)').matches;
     const small = window.matchMedia('(max-width: 720px)').matches;
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const cores = navigator.hardwareConcurrency || 8;
-    return {
+    const ua = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const isSafari = /^((?!chrome|android|crios|fxios|edg|opr).)*safari/i.test(ua);
+    const isWechat = /MicroMessenger/i.test(ua);
+    const profile: Profile = {
       isMobile: small || (coarse && width <= 900),
       prefersReducedMotion: reduced,
       isConstrained: cores <= 4 && width <= 1100,
+      isWebKitRisk: isIOS || isSafari || isWechat,
+      supportsRichEffects: false,
     };
+    profile.supportsRichEffects = !profile.isMobile && !profile.prefersReducedMotion && !profile.isConstrained && !profile.isWebKitRisk;
+    return profile;
   };
 
   const [profile, setProfile] = useState(getProfile);
@@ -867,6 +898,45 @@ function useStudioMotionProfile() {
   }, []);
 
   return profile;
+}
+
+function LightweightGalaxy() {
+  return (
+    <div className="dapo-lite-galaxy" aria-hidden="true">
+      <span className="dapo-lite-star dapo-lite-star--a" />
+      <span className="dapo-lite-star dapo-lite-star--b" />
+      <span className="dapo-lite-star dapo-lite-star--c" />
+      <span className="dapo-lite-star dapo-lite-star--d" />
+      <span className="dapo-lite-star dapo-lite-star--e" />
+    </div>
+  );
+}
+
+function LitePromptGallery({
+  items,
+  onSelect,
+}: {
+  items: Array<{ id: string; title: string; subtitle?: string; image: string; fallbackImage?: string; prompt?: string }>;
+  onSelect: (item: { title: string; subtitle?: string; image: string; prompt?: string }) => void;
+}) {
+  return (
+    <div className="dapo-lite-gallery" aria-label="快捷提示词">
+      {items.map((item, index) => (
+        <button
+          key={`${item.id}-${index}`}
+          type="button"
+          className="dapo-lite-gallery__card"
+          onClick={() => onSelect(item)}
+        >
+          <span className="dapo-lite-gallery__image">
+            <img src={item.image} alt="" loading={index < 3 ? 'eager' : 'lazy'} onError={(e) => { e.currentTarget.src = item.fallbackImage ?? promptGalleryFallbackImage(index); }} />
+          </span>
+          <span className="dapo-lite-gallery__title">{item.title}</span>
+          {item.subtitle && <span className="dapo-lite-gallery__subtitle">{item.subtitle}</span>}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function ComposerSelect({ value, options, onChange, disabled, wide }: { value: string; options: { value: string; label: string }[]; onChange: (value: string) => void; disabled?: boolean; wide?: boolean }) {
