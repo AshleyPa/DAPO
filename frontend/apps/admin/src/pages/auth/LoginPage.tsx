@@ -92,7 +92,7 @@ export default function LoginPage() {
         </button>
 
         <p className="text-center text-tiny text-text-tertiary">
-          初始账号 <code className="kbd">admin / admin123</code> · 登录后请立即修改
+          登录后请定期更新管理员密码，并避免共享后台账号
         </p>
       </form>
     </div>
