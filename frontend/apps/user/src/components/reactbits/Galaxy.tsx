@@ -18,6 +18,8 @@ type GalaxyProps = HTMLAttributes<HTMLDivElement> & {
   repulsionStrength?: number;
   autoCenterRepulsion?: number;
   transparent?: boolean;
+  frameRate?: number;
+  dpr?: number;
 };
 
 const vertexShader = `
@@ -199,6 +201,8 @@ export default function Galaxy({
   rotationSpeed = 0.1,
   autoCenterRepulsion = 0,
   transparent = true,
+  frameRate = 60,
+  dpr = 1,
   className,
   ...rest
 }: GalaxyProps) {
@@ -212,9 +216,11 @@ export default function Galaxy({
     const container = containerRef.current;
     if (!container) return undefined;
 
+    const safeDpr = Math.max(0.5, Math.min(2, dpr));
     const renderer = new Renderer({
       alpha: transparent,
       premultipliedAlpha: false,
+      dpr: safeDpr,
     });
     const { gl } = renderer;
 
@@ -281,8 +287,14 @@ export default function Galaxy({
     }
 
     let animationFrame = 0;
+    let lastFrameTime = 0;
+    const frameInterval = 1000 / Math.max(1, Math.min(60, frameRate));
     const animate = (time: number) => {
       animationFrame = window.requestAnimationFrame(animate);
+      if (document.visibilityState === 'hidden') return;
+      if (time - lastFrameTime < frameInterval) return;
+      lastFrameTime = time;
+
       if (!disableAnimation) {
         program.uniforms.uTime.value = time * 0.001;
         program.uniforms.uStarSpeed.value = (time * 0.001 * starSpeed) / 10.0;
@@ -316,13 +328,17 @@ export default function Galaxy({
     autoCenterRepulsion,
     density,
     disableAnimation,
-    focal,
+    dpr,
+    focal[0],
+    focal[1],
+    frameRate,
     glowIntensity,
     hueShift,
     mouseInteraction,
     mouseRepulsion,
     repulsionStrength,
-    rotation,
+    rotation[0],
+    rotation[1],
     rotationSpeed,
     saturation,
     speed,

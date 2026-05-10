@@ -217,12 +217,23 @@ func (s *AccountTestService) Test(ctx context.Context, account *model.Account) (
 	if len(errMsg) > 250 {
 		errMsg = errMsg[:250]
 	}
+	var testError any = nil
+	if !ok {
+		testError = errMsg
+	}
 	now := time.Now().UTC()
 	updates := map[string]any{
 		"last_test_at":         now,
 		"last_test_status":     st,
 		"last_test_latency_ms": latencyMs,
-		"last_test_error":      errMsg,
+		"last_test_error":      testError,
+	}
+	if ok {
+		updates["last_error"] = nil
+		updates["cooldown_until"] = nil
+		if account.Status == model.AccountStatusBroken {
+			updates["status"] = model.AccountStatusEnabled
+		}
 	}
 	if account.Provider == model.ProviderGROK && account.AuthType == model.AuthTypeCookie && ok {
 		updates["access_token_expires_at"] = now.Add(grokTokenTTL)
@@ -250,7 +261,7 @@ func (s *AccountTestService) testGPT(ctx context.Context, account *model.Account
 	if account.BaseURL != nil && *account.BaseURL != "" {
 		base = strings.TrimRight(*account.BaseURL, "/")
 	}
-	endpoint := base + "/v1/models"
+	endpoint := openAICompatibleModelsEndpoint(base)
 
 	authHeader, err := s.buildAuthHeader(account)
 	if err != nil {
@@ -278,6 +289,13 @@ func (s *AccountTestService) testGPT(ctx context.Context, account *model.Account
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode/100 != 2 {
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+			if ok, msg := s.probeOpenAICompatibleImageEndpoint(ctx, base, authHeader, proxyURL); ok {
+				return true, "", nil
+			} else if msg != "" {
+				return false, msg, nil
+			}
+		}
 		msg := strings.TrimSpace(string(body))
 		if len(msg) > 200 {
 			msg = msg[:200]
@@ -285,6 +303,101 @@ func (s *AccountTestService) testGPT(ctx context.Context, account *model.Account
 		return false, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, msg), nil
 	}
 	return true, "", nil
+}
+
+func (s *AccountTestService) probeOpenAICompatibleImageEndpoint(ctx context.Context, base, authHeader, proxyURL string) (bool, string) {
+	endpoint := openAICompatibleImageEndpoint(base)
+	client, err := outbound.NewClient(outbound.Options{
+		ProxyURL: proxyURL,
+		Timeout:  20 * time.Second,
+		Mode:     outbound.ModeUTLS,
+		Profile:  outbound.ProfileChrome,
+	})
+	if err != nil {
+		return false, err.Error()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(`{}`))
+	if err != nil {
+		return false, err.Error()
+	}
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Sprintf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	msg := strings.TrimSpace(string(body))
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	if resp.StatusCode/100 == 2 {
+		return true, ""
+	}
+	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity {
+		if openAICompatibleAuthFailure(msg) {
+			return false, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, msg)
+		}
+		return true, ""
+	}
+	return false, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, msg)
+}
+
+func openAICompatibleModelsEndpoint(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		base = "https://api.openai.com"
+	}
+	if strings.HasSuffix(base, "/v1/models") {
+		return base
+	}
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/models"
+	}
+	return base + "/v1/models"
+}
+
+func openAICompatibleImageEndpoint(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		base = "https://api.openai.com"
+	}
+	if strings.HasSuffix(base, "/images/generations") {
+		return base
+	}
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/images/generations"
+	}
+	return base + "/v1/images/generations"
+}
+
+func openAICompatibleChatEndpoint(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		base = "https://api.openai.com"
+	}
+	if strings.HasSuffix(base, "/chat/completions") {
+		return base
+	}
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/chat/completions"
+	}
+	return base + "/v1/chat/completions"
+}
+
+func openAICompatibleAuthFailure(msg string) bool {
+	msg = strings.ToLower(strings.TrimSpace(msg))
+	if msg == "" {
+		return false
+	}
+	for _, marker := range []string{"unauthorized", "forbidden", "invalid api key", "invalid_api_key", "incorrect api key", "api key", "authentication", "authorization", "bearer"} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 type accountTestInfo struct {

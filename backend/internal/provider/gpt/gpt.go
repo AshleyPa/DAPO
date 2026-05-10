@@ -164,7 +164,7 @@ func (p *Provider) Generate(ctx context.Context, req *provider.Request) (*provid
 		base = p.defaultURL
 	}
 	base = strings.TrimRight(base, "/")
-	url := base + "/v1/images/generations"
+	url := imageGenerationEndpoint(base)
 
 	count := req.Count
 	if count <= 0 {
@@ -1799,10 +1799,16 @@ func mainModelForImage2(model string) string {
 
 func responseEndpoint(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		base = defaultBaseURL
+	}
 	if strings.HasSuffix(base, "/responses") {
 		return base
 	}
 	if strings.Contains(base, "/backend-api/codex") {
+		return base + "/responses"
+	}
+	if strings.HasSuffix(base, "/v1") {
 		return base + "/responses"
 	}
 	return base + "/v1/responses"

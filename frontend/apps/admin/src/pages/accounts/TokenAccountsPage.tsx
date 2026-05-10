@@ -104,6 +104,7 @@ function expireState(expireAt?: number): { label: string; detail: string; cls: s
 function accountRowStatus(item: AccountItem): { label: string; tone: 'ok' | 'warn' | 'err' | 'mute' } {
   const base = statusLabel(item.status);
   if (item.status !== 1) return { label: base.label, tone: base.tone };
+  if (item.last_test_status === 1) return { label: base.label, tone: base.tone };
   const hasError = !!(item.last_error || '').trim() || item.last_test_status === 2 || !!(item.last_test_error || '').trim();
   return hasError ? { label: '异常', tone: 'err' } : { label: base.label, tone: base.tone };
 }
@@ -466,7 +467,7 @@ export default function TokenAccountsPage() {
               const check = testLabel(item.last_test_status);
               const CheckIcon = check.icon;
               const expire = expireState(item.access_token_expire_at);
-              const lastError = (item.last_error || '').trim();
+              const lastError = item.last_test_status === 1 ? '' : (item.last_error || '').trim();
               const testError = (item.last_test_error || '').trim();
               const statusErrorText = [lastError, testError].filter(Boolean).join('\n\n');
               const needsAttention = isOAuth && (!item.has_access_token || item.last_test_status === 2 || !!testError);

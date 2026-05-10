@@ -26,7 +26,29 @@ type CircularGalleryProps = {
   font?: string;
   scrollSpeed?: number;
   scrollEase?: number;
+  frameRate?: number;
+  dpr?: number;
+  antialias?: boolean;
+  widthSegments?: number;
+  heightSegments?: number;
 };
+
+type GalleryConfig = Required<
+  Pick<
+    CircularGalleryProps,
+    | 'bend'
+    | 'textColor'
+    | 'borderRadius'
+    | 'font'
+    | 'scrollSpeed'
+    | 'scrollEase'
+    | 'frameRate'
+    | 'dpr'
+    | 'antialias'
+    | 'widthSegments'
+    | 'heightSegments'
+  >
+>;
 
 function debounce<T extends (...args: unknown[]) => void>(func: T, wait: number) {
   let timeout: number;
@@ -296,6 +318,7 @@ class GalleryApp {
   private screen = { width: 1, height: 1 };
   private viewport = { width: 1, height: 1 };
   private raf = 0;
+  private lastFrameTime = 0;
   private isDown = false;
   private didDrag = false;
   private start = 0;
@@ -307,7 +330,7 @@ class GalleryApp {
     private readonly container: HTMLElement,
     items: CircularGalleryItem[],
     private readonly onSelect: (item: CircularGalleryItem) => void,
-    private readonly config: Required<Pick<CircularGalleryProps, 'bend' | 'textColor' | 'borderRadius' | 'font' | 'scrollSpeed' | 'scrollEase'>>,
+    private readonly config: GalleryConfig,
   ) {
     this.scroll = { ease: config.scrollEase, current: 0, target: 0, last: 0 };
     this.onCheckDebounce = debounce(this.onCheck.bind(this), 200);
@@ -317,15 +340,16 @@ class GalleryApp {
     this.onResize();
     this.createGeometry();
     this.createMedias(items);
-    this.update();
+    this.raf = window.requestAnimationFrame(this.boundUpdate);
     this.addEventListeners();
   }
 
   private createRenderer() {
+    const dpr = Math.max(0.5, Math.min(window.devicePixelRatio || 1, this.config.dpr));
     this.renderer = new Renderer({
       alpha: true,
-      antialias: true,
-      dpr: Math.min(window.devicePixelRatio || 1, 2),
+      antialias: this.config.antialias,
+      dpr,
     });
     this.gl = this.renderer.gl;
     this.gl.clearColor(0, 0, 0, 0);
@@ -344,8 +368,8 @@ class GalleryApp {
 
   private createGeometry() {
     this.planeGeometry = new Plane(this.gl, {
-      heightSegments: 50,
-      widthSegments: 100,
+      heightSegments: this.config.heightSegments,
+      widthSegments: this.config.widthSegments,
     });
   }
 
@@ -450,13 +474,18 @@ class GalleryApp {
       }, null);
   }
 
-  private update() {
+  private update(time = 0) {
+    this.raf = window.requestAnimationFrame(this.boundUpdate);
+    if (document.visibilityState === 'hidden') return;
+    const frameInterval = 1000 / Math.max(1, Math.min(60, this.config.frameRate));
+    if (time - this.lastFrameTime < frameInterval) return;
+    this.lastFrameTime = time;
+
     this.scroll.current = lerp(this.scroll.current, this.scroll.target, this.scroll.ease);
     const direction = this.scroll.current > this.scroll.last ? 'right' : 'left';
     this.medias.forEach((media) => media.update(this.scroll, direction));
     this.renderer.render({ scene: this.scene, camera: this.camera });
     this.scroll.last = this.scroll.current;
-    this.raf = window.requestAnimationFrame(this.update.bind(this));
   }
 
   private addEventListeners() {
@@ -495,6 +524,7 @@ class GalleryApp {
   private readonly boundOnTouchMove = this.onTouchMove.bind(this);
   private readonly boundOnTouchUp = this.onTouchUp.bind(this);
   private readonly boundOnClick = this.onClick.bind(this);
+  private readonly boundUpdate = this.update.bind(this);
 }
 
 export default function CircularGallery({
@@ -507,6 +537,11 @@ export default function CircularGallery({
   font = 'bold 30px Figtree',
   scrollSpeed = 2.3,
   scrollEase = 0.04,
+  frameRate = 60,
+  dpr = 1.5,
+  antialias = true,
+  widthSegments = 100,
+  heightSegments = 50,
 }: CircularGalleryProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -520,9 +555,14 @@ export default function CircularGallery({
       font,
       scrollSpeed,
       scrollEase,
+      frameRate,
+      dpr,
+      antialias,
+      widthSegments,
+      heightSegments,
     });
     return () => app.destroy();
-  }, [bend, borderRadius, font, items, onSelect, scrollEase, scrollSpeed, textColor]);
+  }, [antialias, bend, borderRadius, dpr, font, frameRate, heightSegments, items, onSelect, scrollEase, scrollSpeed, textColor, widthSegments]);
 
   return (
     <div className={className ? `circular-gallery ${className}` : 'circular-gallery'}>

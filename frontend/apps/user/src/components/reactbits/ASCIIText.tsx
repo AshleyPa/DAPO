@@ -43,6 +43,7 @@ type ASCIITextProps = {
   strokeWidth?: number;
   planeBaseHeight?: number;
   enableWaves?: boolean;
+  frameRate?: number;
 };
 
 const pixelRatio = () => (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
@@ -211,9 +212,11 @@ class CanvAscii {
   private readonly mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly filter: AsciiFilter;
+  private readonly frameInterval: number;
   private readonly planeWidth: number;
   private readonly planeHeight: number;
   private animationFrameId = 0;
+  private lastFrameTime = 0;
   private mouse = { x: 0, y: 0 };
 
   constructor(
@@ -225,6 +228,7 @@ class CanvAscii {
     this.camera = new THREE.PerspectiveCamera(45, this.width / this.height, 1, 1000);
     this.camera.position.z = 30;
 
+    this.frameInterval = 1000 / Math.max(1, Math.min(60, options.frameRate));
     this.textCanvas = new CanvasText(options.text, options.textFontSize, options.textColor, options.strokeColor, options.strokeWidth);
     this.textCanvas.resize();
     this.textCanvas.render();
@@ -263,11 +267,14 @@ class CanvAscii {
   }
 
   load() {
-    const animate = () => {
+    const animate = (time: number) => {
       this.animationFrameId = window.requestAnimationFrame(animate);
-      this.render();
+      if (document.visibilityState === 'hidden') return;
+      if (time - this.lastFrameTime < this.frameInterval) return;
+      this.lastFrameTime = time;
+      this.render(time * 0.001);
     };
-    animate();
+    this.animationFrameId = window.requestAnimationFrame(animate);
   }
 
   setSize(width: number, height: number) {
@@ -306,10 +313,7 @@ class CanvAscii {
     this.mouse = { x: pointer.clientX - bounds.left, y: pointer.clientY - bounds.top };
   }
 
-  private render() {
-    const time = Date.now() * 0.001;
-    this.textCanvas.render();
-    this.texture.needsUpdate = true;
+  private render(time: number) {
     const timeUniform = this.mesh.material.uniforms.uTime;
     if (timeUniform) timeUniform.value = Math.sin(time);
     this.mesh.rotation.x += (mapRange(this.mouse.y, 0, this.height, 0.5, -0.5) - this.mesh.rotation.x) * 0.05;
@@ -334,6 +338,7 @@ export default function ASCIIText({
   strokeWidth = 0,
   planeBaseHeight = 7,
   enableWaves = true,
+  frameRate = 45,
 }: ASCIITextProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const asciiRef = useRef<CanvAscii | null>(null);
@@ -348,7 +353,7 @@ export default function ASCIIText({
 
     const create = (width: number, height: number) => {
       if (cancelled || asciiRef.current) return;
-      const instance = new CanvAscii({ text, asciiFontSize, textFontSize, textColor, strokeColor, strokeWidth, planeBaseHeight, enableWaves }, container, width, height);
+      const instance = new CanvAscii({ text, asciiFontSize, textFontSize, textColor, strokeColor, strokeWidth, planeBaseHeight, enableWaves, frameRate }, container, width, height);
       asciiRef.current = instance;
       instance.load();
       resizeObserver = new ResizeObserver((entries) => {
@@ -382,7 +387,7 @@ export default function ASCIIText({
       asciiRef.current?.dispose();
       asciiRef.current = null;
     };
-  }, [asciiFontSize, enableWaves, planeBaseHeight, strokeColor, strokeWidth, text, textColor, textFontSize]);
+  }, [asciiFontSize, enableWaves, frameRate, planeBaseHeight, strokeColor, strokeWidth, text, textColor, textFontSize]);
 
   return <div ref={containerRef} className="ascii-text-container" aria-hidden="true" />;
 }

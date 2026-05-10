@@ -62,6 +62,44 @@ func TestImageSizeUsesPic2APIStandardDimensions(t *testing.T) {
 	}
 }
 
+func TestImageGenerationEndpointAvoidsDuplicateV1(t *testing.T) {
+	cases := []struct {
+		base string
+		want string
+	}{
+		{base: "https://example.test", want: "https://example.test/v1/images/generations"},
+		{base: "https://example.test/v1", want: "https://example.test/v1/images/generations"},
+		{base: "https://example.test/v1/", want: "https://example.test/v1/images/generations"},
+		{base: "https://example.test/v1/images/generations", want: "https://example.test/v1/images/generations"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.base, func(t *testing.T) {
+			if got := imageGenerationEndpoint(tc.base); got != tc.want {
+				t.Fatalf("imageGenerationEndpoint() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResponseEndpointAvoidsDuplicateV1(t *testing.T) {
+	cases := []struct {
+		base string
+		want string
+	}{
+		{base: "https://example.test", want: "https://example.test/v1/responses"},
+		{base: "https://example.test/v1", want: "https://example.test/v1/responses"},
+		{base: "https://example.test/v1/", want: "https://example.test/v1/responses"},
+		{base: "https://example.test/v1/responses", want: "https://example.test/v1/responses"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.base, func(t *testing.T) {
+			if got := responseEndpoint(tc.base); got != tc.want {
+				t.Fatalf("responseEndpoint() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestImagesAPIQualityPrefersResolutionTierForFrontendHigh(t *testing.T) {
 	cases := []struct {
 		name string

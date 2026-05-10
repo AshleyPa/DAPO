@@ -142,7 +142,7 @@ export function AppLayout() {
           </div>
         </div>
 
-        <nav className="flex gap-1 overflow-x-auto border-t border-white/10 px-3 py-2 md:hidden">
+        <nav className="dapo-mobile-nav flex gap-1 overflow-x-auto border-t border-white/10 px-3 py-2 md:hidden">
           {NAV_ITEMS.map((item) => <MobileMode key={item.to} item={item} onClick={handleNav} />)}
         </nav>
       </header>

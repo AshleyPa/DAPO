@@ -615,7 +615,7 @@ func (s *ChatService) openUpstream(ctx context.Context, acc *model.Account, body
 		base = strings.TrimRight(*acc.BaseURL, "/")
 	}
 	payload, _ := json.Marshal(body)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAICompatibleChatEndpoint(base), bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}

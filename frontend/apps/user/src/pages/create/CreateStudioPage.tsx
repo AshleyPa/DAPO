@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
 import {
@@ -215,6 +215,8 @@ export default function CreateStudioPage() {
   const ensureLoggedIn = useEnsureLoggedIn();
   const refreshMe = useAuthStore((s) => s.refreshMe);
   const token = useAuthStore((s) => s.token);
+  const motionProfile = useStudioMotionProfile();
+  const compactMotion = motionProfile.isMobile || motionProfile.prefersReducedMotion || motionProfile.isConstrained;
 
   const modelCatalog = useQuery({
     queryKey: ['gen.models'],
@@ -390,10 +392,10 @@ export default function CreateStudioPage() {
     }, '登录后即可开始创作');
   };
 
-  const fillPromptFromCard = (item: PromptGalleryCard) => {
+  const fillPromptFromCard = useCallback((item: PromptGalleryCard) => {
     setPrompt(item.prompt);
     window.requestAnimationFrame(() => promptRef.current?.focus());
-  };
+  }, []);
 
   const readFileAsDataURL = (file: File) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -431,21 +433,23 @@ export default function CreateStudioPage() {
   };
 
   return (
-    <div className="dapo-studio relative min-h-screen overflow-x-hidden bg-black text-white">
+    <div className={clsx('dapo-studio relative min-h-screen overflow-x-hidden bg-black text-white', compactMotion && 'dapo-studio--compact-motion')}>
       <div className="dapo-galaxy-layer" aria-hidden="true">
         <Galaxy
-          mouseRepulsion
-          mouseInteraction
-          density={1}
-          glowIntensity={0.4}
-          saturation={0.2}
+          mouseRepulsion={!compactMotion}
+          mouseInteraction={!compactMotion}
+          density={compactMotion ? 0.56 : 1}
+          glowIntensity={compactMotion ? 0.28 : 0.4}
+          saturation={compactMotion ? 0.12 : 0.2}
           hueShift={30}
-          twinkleIntensity={0.3}
-          rotationSpeed={0.1}
-          repulsionStrength={2}
+          twinkleIntensity={compactMotion ? 0.12 : 0.3}
+          rotationSpeed={compactMotion ? 0.025 : 0.1}
+          repulsionStrength={compactMotion ? 0 : 2}
           autoCenterRepulsion={0}
-          starSpeed={0.5}
-          speed={1}
+          starSpeed={compactMotion ? 0.26 : 0.5}
+          speed={compactMotion ? 0.55 : 1}
+          frameRate={compactMotion ? 24 : 60}
+          dpr={compactMotion ? 0.75 : 1}
         />
       </div>
 
@@ -460,6 +464,7 @@ export default function CreateStudioPage() {
             maxAttachments={maxAttachments}
             expectedCost={expectedCost}
             inProgress={!!inProgress}
+            compactMotion={compactMotion}
             onOpen={setPreview}
           />
 
@@ -478,7 +483,7 @@ export default function CreateStudioPage() {
             >
               <div className="dapo-composer-card p-4 text-white sm:p-5">
               <div className="mb-5 flex flex-col gap-2">
-                <PromptGalleryRail cards={promptGalleryCards} onPick={fillPromptFromCard} />
+                <PromptGalleryRail cards={promptGalleryCards} compactMotion={compactMotion} onPick={fillPromptFromCard} />
               </div>
 
               <div className="dapo-prompt-panel rounded-[8px] border border-[#d7dde5] bg-[#fbfcfd] p-3 sm:p-4">
@@ -636,6 +641,7 @@ function DevelopmentStage({
   maxAttachments,
   expectedCost,
   inProgress,
+  compactMotion,
   onOpen,
 }: {
   mode: StudioMode;
@@ -646,6 +652,7 @@ function DevelopmentStage({
   maxAttachments: number;
   expectedCost: string | number;
   inProgress: boolean;
+  compactMotion: boolean;
   onOpen: (preview: { url: string; type: 'image' | 'video'; title: string }) => void;
 }) {
   const activeItem = task;
@@ -709,6 +716,8 @@ function DevelopmentStage({
             <div className="relative min-h-[390px] w-full">
               <GeneratingDots />
             </div>
+          ) : compactMotion ? (
+            <MobileStageTitle />
           ) : (
             <div className="dapo-ascii-stage">
               <Suspense fallback={null}>
@@ -721,6 +730,7 @@ function DevelopmentStage({
                   strokeColor="#7dd3fc"
                   strokeWidth={8}
                   planeBaseHeight={7.2}
+                  frameRate={45}
                 />
               </Suspense>
             </div>
@@ -728,6 +738,14 @@ function DevelopmentStage({
         </div>
       </div>
     </section>
+  );
+}
+
+function MobileStageTitle() {
+  return (
+    <div className="dapo-mobile-title-stage" aria-label="让每一个灵感显影">
+      <span>让每一个灵感显影</span>
+    </div>
   );
 }
 
@@ -766,7 +784,7 @@ function ParameterStrip({
   );
 }
 
-function PromptGalleryRail({ cards, onPick }: { cards: PromptGalleryCard[]; onPick: (card: PromptGalleryCard) => void }) {
+function PromptGalleryRail({ cards, compactMotion, onPick }: { cards: PromptGalleryCard[]; compactMotion: boolean; onPick: (card: PromptGalleryCard) => void }) {
   const items = useMemo(
     () =>
       cards.map((card) => ({
@@ -778,6 +796,15 @@ function PromptGalleryRail({ cards, onPick }: { cards: PromptGalleryCard[]; onPi
       })),
     [cards],
   );
+  const handleSelect = useCallback((item: { title: string; subtitle?: string; image: string; prompt?: string }) => {
+    if (!item.prompt) return;
+    onPick({
+      title: item.title,
+      subtitle: item.subtitle,
+      image: item.image,
+      prompt: item.prompt,
+    });
+  }, [onPick]);
 
   return (
     <div className="mt-4">
@@ -792,19 +819,53 @@ function PromptGalleryRail({ cards, onPick }: { cards: PromptGalleryCard[]; onPi
         scrollSpeed={2.3}
         scrollEase={0.04}
         textColor="#ffffff"
-        font="bold 30px Figtree"
-        onSelect={(item) => {
-          if (!item.prompt) return;
-          onPick({
-            title: item.title,
-            subtitle: item.subtitle,
-            image: item.image,
-            prompt: item.prompt,
-          });
-        }}
+        font={compactMotion ? 'bold 22px Figtree' : 'bold 30px Figtree'}
+        frameRate={compactMotion ? 24 : 60}
+        dpr={compactMotion ? 1 : 1.5}
+        antialias={!compactMotion}
+        widthSegments={compactMotion ? 20 : 100}
+        heightSegments={compactMotion ? 12 : 50}
+        onSelect={handleSelect}
       />
     </div>
   );
+}
+
+function useStudioMotionProfile() {
+  const getProfile = () => {
+    if (typeof window === 'undefined') {
+      return { isMobile: false, prefersReducedMotion: false, isConstrained: false };
+    }
+    const width = window.innerWidth || 1440;
+    const coarse = window.matchMedia('(pointer: coarse)').matches;
+    const small = window.matchMedia('(max-width: 720px)').matches;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const cores = navigator.hardwareConcurrency || 8;
+    return {
+      isMobile: small || (coarse && width <= 900),
+      prefersReducedMotion: reduced,
+      isConstrained: cores <= 4 && width <= 1100,
+    };
+  };
+
+  const [profile, setProfile] = useState(getProfile);
+
+  useEffect(() => {
+    const mediaQueries = [
+      window.matchMedia('(pointer: coarse)'),
+      window.matchMedia('(max-width: 720px)'),
+      window.matchMedia('(prefers-reduced-motion: reduce)'),
+    ];
+    const update = () => setProfile(getProfile());
+    mediaQueries.forEach((mq) => mq.addEventListener('change', update));
+    window.addEventListener('resize', update);
+    return () => {
+      mediaQueries.forEach((mq) => mq.removeEventListener('change', update));
+      window.removeEventListener('resize', update);
+    };
+  }, []);
+
+  return profile;
 }
 
 function ComposerSelect({ value, options, onChange, disabled, wide }: { value: string; options: { value: string; label: string }[]; onChange: (value: string) => void; disabled?: boolean; wide?: boolean }) {

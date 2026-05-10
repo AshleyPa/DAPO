@@ -184,6 +184,24 @@
     opacity: .98;
   }
 
+  .dapo-studio--compact-motion .galaxy-container,
+  .dapo-studio--compact-motion .galaxy-canvas {
+    opacity: .76;
+  }
+
+  .dapo-studio--compact-motion .dapo-galaxy-layer {
+    background:
+      radial-gradient(circle at 48% 36%, rgba(230, 243, 190, .08), transparent 26%),
+      radial-gradient(circle at 50% 62%, rgba(255, 255, 255, .038), transparent 32%),
+      linear-gradient(180deg, rgba(8, 7, 12, .99), rgba(5, 5, 9, 1));
+  }
+
+  .dapo-studio--compact-motion .dapo-galaxy-layer::before {
+    background:
+      radial-gradient(ellipse at 50% 42%, transparent 0 34%, rgba(0, 0, 0, .20) 68%, rgba(0, 0, 0, .44) 100%),
+      linear-gradient(180deg, rgba(0, 0, 0, .22), transparent 18%, transparent 72%, rgba(0, 0, 0, .58));
+  }
+
   .dapo-stage-frame {
     min-height: clamp(260px, 55vw, 620px);
     overflow: visible;
@@ -245,6 +263,38 @@
     mix-blend-mode: normal;
     opacity: .98;
     animation: dapo-ascii-edge-glow 5.8s ease-in-out infinite alternate;
+  }
+
+  .dapo-mobile-title-stage {
+    position: relative;
+    display: grid;
+    min-height: inherit;
+    width: 100%;
+    max-width: 100%;
+    place-items: center;
+    overflow: hidden;
+    padding: clamp(28px, 8vw, 64px) clamp(20px, 6vw, 72px);
+    text-align: center;
+  }
+
+  .dapo-mobile-title-stage span {
+    display: block;
+    max-width: min(820px, 92vw);
+    color: #fff;
+    font-size: clamp(34px, 9vw, 58px);
+    font-weight: 620;
+    line-height: 1.12;
+    letter-spacing: 0;
+    text-wrap: balance;
+    word-break: keep-all;
+    text-shadow:
+      0 0 1px rgba(255, 255, 255, .98),
+      0 0 12px rgba(255, 255, 255, .56),
+      0 0 26px rgba(125, 211, 252, .42),
+      0 0 48px rgba(168, 85, 247, .30),
+      0 0 72px rgba(244, 114, 182, .18);
+    -webkit-text-stroke: .45px rgba(224, 242, 254, .66);
+    animation: dapo-mobile-title-glow 4.8s ease-in-out infinite alternate;
   }
 
   .border-glow {
@@ -624,6 +674,18 @@
   }
 }
 
+@keyframes dapo-mobile-title-glow {
+  from {
+    opacity: .92;
+    transform: translate3d(0, 0, 0) scale(.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, -2px, 0) scale(1.01);
+  }
+}
+
 /* Final user-app typography pass: this front end should feel light and quiet.
    Override Tailwind font weight utilities that individual pages still use. */
 #root :where(
@@ -677,6 +739,15 @@
 
 .dapo-studio textarea::placeholder {
   line-height: 1.9;
+}
+
+.dapo-mobile-nav {
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.dapo-mobile-nav::-webkit-scrollbar {
+  display: none;
 }
 
 @media (max-width: 720px) {
