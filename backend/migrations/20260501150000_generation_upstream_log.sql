@@ -1,3 +1,5 @@
+-- +goose Up
+-- +goose StatementBegin
 CREATE TABLE IF NOT EXISTS `generation_upstream_log` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `task_id` char(26) NOT NULL,
@@ -17,3 +19,9 @@ CREATE TABLE IF NOT EXISTS `generation_upstream_log` (
   KEY `idx_task_id` (`task_id`),
   KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='provider upstream diagnostics';
+-- +goose StatementEnd
+
+-- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS `generation_upstream_log`;
+-- +goose StatementEnd

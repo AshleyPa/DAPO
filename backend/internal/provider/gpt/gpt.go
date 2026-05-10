@@ -465,6 +465,17 @@ func (p *Provider) generateImage2Web(ctx context.Context, req *provider.Request)
 	return &provider.Result{TaskID: req.TaskID, Assets: assets, Latency: time.Since(start)}, nil
 }
 
+func imageGenerationEndpoint(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.HasSuffix(base, "/images/generations") {
+		return base
+	}
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/images/generations"
+	}
+	return base + "/v1/images/generations"
+}
+
 func (p *Provider) generateImage2(ctx context.Context, req *provider.Request) (*provider.Result, error) {
 	base := strings.TrimRight(req.BaseURL, "/")
 	if base == "" {
@@ -586,6 +597,21 @@ func (p *Provider) generateImage2(ctx context.Context, req *provider.Request) (*
 			if resp.StatusCode >= 400 {
 				raw, _ := io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
+				if shouldFallbackImage2ImagesAPI(req, resp.StatusCode, raw) {
+					logUpstream(ctx, req, provider.UpstreamLogEntry{
+						Provider:        "gpt",
+						Stage:           "images_api.fallback",
+						Method:          "POST",
+						URL:             url,
+						StatusCode:      resp.StatusCode,
+						RequestExcerpt:  snippet(payload, 600),
+						ResponseExcerpt: snippet(raw, 600),
+						Meta: map[string]any{
+							"reason": "responses_unavailable",
+						},
+					})
+					return p.generateImage2ImagesAPI(ctx, req)
+				}
 				if retriedWithoutToolChoice {
 					logUpstream(ctx, req, provider.UpstreamLogEntry{
 						Provider:        "gpt",
@@ -753,6 +779,306 @@ func (p *Provider) generateImage2(ctx context.Context, req *provider.Request) (*
 		},
 	})
 	return &provider.Result{TaskID: req.TaskID, Assets: assets, Latency: time.Since(start)}, nil
+}
+
+func shouldFallbackImage2ImagesAPI(req *provider.Request, statusCode int, raw []byte) bool {
+	if req == nil || req.Account == nil || req.Account.AuthType != model.AuthTypeAPIKey {
+		return false
+	}
+	if statusCode != http.StatusNotFound && statusCode != http.StatusMethodNotAllowed {
+		return false
+	}
+	msg := strings.ToLower(string(raw))
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "404") || strings.TrimSpace(msg) == ""
+}
+
+type imageGenerationTaskResp struct {
+	ID          string `json:"id"`
+	TaskID      string `json:"task_id"`
+	Object      string `json:"object"`
+	Model       string `json:"model"`
+	Status      string `json:"status"`
+	Progress    int    `json:"progress"`
+	CreatedAt   int64  `json:"created_at"`
+	CompletedAt int64  `json:"completed_at"`
+	ExpiresAt   int64  `json:"expires_at"`
+	URL         string `json:"url"`
+	Data        []struct {
+		URL     string `json:"url"`
+		B64JSON string `json:"b64_json"`
+	} `json:"data"`
+	Result *struct {
+		Type string `json:"type"`
+		Data []struct {
+			URL     string `json:"url"`
+			B64JSON string `json:"b64_json"`
+			Format  string `json:"format"`
+			Mime    string `json:"mime"`
+		} `json:"data"`
+	} `json:"result"`
+	Choices []struct {
+		Text    string `json:"text"`
+		Message *struct {
+			Content string `json:"content"`
+			Role    string `json:"role"`
+		} `json:"message"`
+	} `json:"choices"`
+	Error *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func (p *Provider) generateImage2ImagesAPI(ctx context.Context, req *provider.Request) (*provider.Result, error) {
+	base := strings.TrimRight(req.BaseURL, "/")
+	if base == "" {
+		base = p.defaultURL
+	}
+	url := imageGenerationEndpoint(base)
+	count := req.Count
+	if count <= 0 {
+		count = 1
+	}
+	size := imageSize(req.Params, "1024x1024")
+	quality := imagesAPIQuality(req.Params)
+	body := map[string]any{
+		"model":  imageToolModel(req.ModelCode),
+		"prompt": req.Prompt,
+		"n":      count,
+		"size":   size,
+	}
+	if quality != "" {
+		body["quality"] = quality
+	}
+	if len(req.RefAssets) > 0 {
+		refs := make([]string, 0, len(req.RefAssets))
+		for _, ref := range req.RefAssets {
+			if ref = strings.TrimSpace(ref); ref != "" {
+				refs = append(refs, ref)
+			}
+		}
+		if len(refs) > 0 {
+			body["reference_images"] = refs
+		}
+	}
+	payload, _ := json.Marshal(body)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+req.Credential)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", "kleinai/1.0")
+
+	start := time.Now()
+	client, err := p.httpClient(req.ProxyURL)
+	if err != nil {
+		return nil, err
+	}
+	logUpstream(ctx, req, provider.UpstreamLogEntry{
+		Provider: "gpt",
+		Stage:    "images_api.start",
+		Method:   "POST",
+		URL:      url,
+		Meta: map[string]any{
+			"model":     req.ModelCode,
+			"size":      size,
+			"quality":   quality,
+			"count":     count,
+			"ref_count": len(req.RefAssets),
+		},
+	})
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_api.request", Method: "POST", URL: url, RequestExcerpt: snippet(payload, 600), Error: err.Error()})
+		return nil, fmt.Errorf("gpt image2 images api http: %w", err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_api.failed", Method: "POST", URL: url, StatusCode: resp.StatusCode, RequestExcerpt: snippet(payload, 600), ResponseExcerpt: snippet(raw, 600)})
+		return nil, fmt.Errorf("gpt image2 images api %d: %s", resp.StatusCode, snippet(raw, 320))
+	}
+	var task imageGenerationTaskResp
+	if err := json.Unmarshal(raw, &task); err != nil {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_api.decode", Method: "POST", URL: url, RequestExcerpt: snippet(payload, 600), ResponseExcerpt: snippet(raw, 600), Error: err.Error()})
+		return nil, fmt.Errorf("gpt image2 images api decode: %w", err)
+	}
+	logUpstream(ctx, req, provider.UpstreamLogEntry{
+		Provider:        "gpt",
+		Stage:           "images_api.created",
+		Method:          "POST",
+		URL:             url,
+		RequestExcerpt:  snippet(payload, 600),
+		ResponseExcerpt: snippet(raw, 600),
+		Meta:            map[string]any{"task_id": firstNonEmpty(task.ID, task.TaskID), "status": task.Status, "progress": task.Progress},
+	})
+	assets, done, err := imagesAPIAssets(task, size)
+	if err != nil {
+		return nil, err
+	}
+	if !done {
+		assets, err = p.pollImage2ImagesAPITask(ctx, client, req, url, firstNonEmpty(task.ID, task.TaskID), size)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(assets) == 0 {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_api.failed", Method: "POST", URL: url, ResponseExcerpt: "gpt image2 images api returned 0 image"})
+		return nil, fmt.Errorf("gpt image2 images api returned 0 image")
+	}
+	logUpstream(ctx, req, provider.UpstreamLogEntry{
+		Provider: "gpt",
+		Stage:    "images_api.success",
+		Method:   "POST",
+		URL:      url,
+		Meta:     map[string]any{"assets": len(assets), "latency_ms": time.Since(start).Milliseconds()},
+	})
+	return &provider.Result{TaskID: req.TaskID, Assets: assets, Latency: time.Since(start)}, nil
+}
+
+func (p *Provider) pollImage2ImagesAPITask(ctx context.Context, client *http.Client, req *provider.Request, createURL, taskID, size string) ([]provider.Asset, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return nil, fmt.Errorf("gpt image2 images api missing task id")
+	}
+	taskURL := strings.TrimRight(createURL, "/") + "/" + strings.TrimSpace(taskID)
+	deadline := time.Now().Add(120 * time.Second)
+	poll := 0
+	for time.Now().Before(deadline) {
+		poll++
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, taskURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+req.Credential)
+		httpReq.Header.Set("User-Agent", "kleinai/1.0")
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_api.poll", Method: "GET", URL: taskURL, Error: err.Error(), Meta: map[string]any{"poll": poll}})
+			return nil, fmt.Errorf("gpt image2 images api poll: %w", err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_api.poll_failed", Method: "GET", URL: taskURL, StatusCode: resp.StatusCode, ResponseExcerpt: snippet(raw, 600), Meta: map[string]any{"poll": poll}})
+			return nil, fmt.Errorf("gpt image2 images api poll %d: %s", resp.StatusCode, snippet(raw, 320))
+		}
+		var task imageGenerationTaskResp
+		if err := json.Unmarshal(raw, &task); err != nil {
+			logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_api.poll_decode", Method: "GET", URL: taskURL, ResponseExcerpt: snippet(raw, 600), Error: err.Error(), Meta: map[string]any{"poll": poll}})
+			return nil, fmt.Errorf("gpt image2 images api poll decode: %w", err)
+		}
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_api.poll", Method: "GET", URL: taskURL, ResponseExcerpt: snippet(raw, 600), Meta: map[string]any{"poll": poll, "status": task.Status, "progress": task.Progress}})
+		assets, done, err := imagesAPIAssets(task, size)
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			return assets, nil
+		}
+	}
+	return nil, fmt.Errorf("gpt image2 images api task timeout")
+}
+
+func imagesAPIAssets(task imageGenerationTaskResp, size string) ([]provider.Asset, bool, error) {
+	status := strings.ToLower(strings.TrimSpace(task.Status))
+	if task.Error != nil && task.Error.Message != "" {
+		return nil, true, fmt.Errorf("gpt image2 images api: %s", task.Error.Message)
+	}
+	if status == "failed" {
+		return nil, true, fmt.Errorf("gpt image2 images api task failed")
+	}
+	items := make([]struct {
+		URL     string
+		B64JSON string
+		Mime    string
+	}, 0)
+	if task.URL != "" {
+		items = append(items, struct {
+			URL     string
+			B64JSON string
+			Mime    string
+		}{URL: task.URL})
+	}
+	for _, d := range task.Data {
+		items = append(items, struct {
+			URL     string
+			B64JSON string
+			Mime    string
+		}{URL: d.URL, B64JSON: d.B64JSON})
+	}
+	if task.Result != nil {
+		for _, d := range task.Result.Data {
+			items = append(items, struct {
+				URL     string
+				B64JSON string
+				Mime    string
+			}{URL: d.URL, B64JSON: d.B64JSON, Mime: firstNonEmpty(d.Mime, "image/"+strings.TrimPrefix(d.Format, "."))})
+		}
+	}
+	for _, c := range task.Choices {
+		content := c.Text
+		if c.Message != nil && strings.TrimSpace(c.Message.Content) != "" {
+			content = c.Message.Content
+		}
+		for _, rawURL := range extractImageMarkdownURLs(content) {
+			items = append(items, struct {
+				URL     string
+				B64JSON string
+				Mime    string
+			}{URL: rawURL})
+		}
+	}
+	if len(items) == 0 {
+		return nil, status == "completed", nil
+	}
+	width, height := parseSize(size)
+	assets := make([]provider.Asset, 0, len(items))
+	for _, item := range items {
+		mime := strings.TrimSpace(item.Mime)
+		if mime == "" || mime == "image/" {
+			mime = "image/png"
+		}
+		assetURL := strings.TrimSpace(item.URL)
+		if assetURL == "" && item.B64JSON != "" {
+			assetURL = "data:" + mime + ";base64," + item.B64JSON
+		}
+		if assetURL != "" {
+			assets = append(assets, provider.Asset{URL: assetURL, Width: width, Height: height, Mime: mime, Meta: map[string]any{"provider_route": "images_api"}})
+		}
+	}
+	return assets, true, nil
+}
+
+var markdownImageURLRe = regexp.MustCompile(`(?i)!?\[[^\]]*\]\((https?://[^)\s]+)\)|https?://[^\s<>"')]+`)
+
+func extractImageMarkdownURLs(content string) []string {
+	var urls []string
+	for _, m := range markdownImageURLRe.FindAllStringSubmatch(content, -1) {
+		rawURL := m[0]
+		if len(m) > 1 && strings.TrimSpace(m[1]) != "" {
+			rawURL = m[1]
+		}
+		rawURL = strings.TrimSpace(strings.TrimRight(rawURL, ".,;"))
+		if rawURL != "" {
+			addUniqueString(&urls, rawURL)
+		}
+	}
+	return urls
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 type webFP struct {
@@ -1503,30 +1829,33 @@ func imageSize(params map[string]any, def string) string {
 	}
 	ratio := strParam(params, "ratio", strParam(params, "aspect_ratio", "1:1"))
 	tier := strings.ToUpper(strParam(params, "resolution", strParam(params, "size_tier", "1K")))
+	if tier == "1" {
+		tier = "1K"
+	}
 	sizes := map[string]map[string]string{
 		"1K": {
 			"1:1":  "1024x1024",
-			"3:2":  "1216x832",
-			"2:3":  "832x1216",
+			"3:2":  "1536x1024",
+			"2:3":  "1024x1536",
 			"4:3":  "1152x864",
 			"3:4":  "864x1152",
 			"5:4":  "1120x896",
 			"4:5":  "896x1120",
-			"16:9": "1344x768",
-			"9:16": "768x1344",
-			"21:9": "1536x640",
+			"16:9": "1280x720",
+			"9:16": "720x1280",
+			"21:9": "1456x624",
 		},
 		"2K": {
-			"1:1":  "1248x1248",
-			"3:2":  "1536x1024",
-			"2:3":  "1024x1536",
-			"4:3":  "1440x1088",
-			"3:4":  "1088x1440",
-			"5:4":  "1392x1120",
-			"4:5":  "1120x1392",
-			"16:9": "1664x928",
-			"9:16": "928x1664",
-			"21:9": "1904x816",
+			"1:1":  "2048x2048",
+			"3:2":  "2496x1664",
+			"2:3":  "1664x2496",
+			"4:3":  "2304x1728",
+			"3:4":  "1728x2304",
+			"5:4":  "2240x1792",
+			"4:5":  "1792x2240",
+			"16:9": "2560x1440",
+			"9:16": "1440x2560",
+			"21:9": "3024x1296",
 		},
 		"4K": {
 			"1:1":  "2480x2480",
@@ -1536,8 +1865,8 @@ func imageSize(params map[string]any, def string) string {
 			"3:4":  "2160x2880",
 			"5:4":  "2784x2224",
 			"4:5":  "2224x2784",
-			"16:9": "3312x1872",
-			"9:16": "1872x3312",
+			"16:9": "3328x1872",
+			"9:16": "1872x3328",
 			"21:9": "3808x1632",
 		},
 	}
@@ -1553,6 +1882,34 @@ func imageSize(params map[string]any, def string) string {
 		}
 	}
 	return def
+}
+
+func imagesAPIQuality(params map[string]any) string {
+	quality := strings.ToLower(strParam(params, "quality", ""))
+	switch quality {
+	case "standard", "1k":
+		return "standard"
+	case "hd", "2k":
+		return "hd"
+	case "4k", "ultra":
+		return "4k"
+	}
+	tier := strings.ToUpper(strParam(params, "resolution", strParam(params, "size_tier", "")))
+	switch tier {
+	case "1", "1K":
+		return "standard"
+	case "2K":
+		return "hd"
+	case "4K":
+		return "4k"
+	}
+	switch quality {
+	case "draft", "low":
+		return "standard"
+	case "high":
+		return ""
+	}
+	return ""
 }
 
 func imageQuality(params map[string]any) string {
