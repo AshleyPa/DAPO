@@ -11,10 +11,12 @@ release_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="${DAPO_RELEASE_ENV_FILE:-${release_dir}/.env}"
 
 if [[ -f "$env_file" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$env_file"
-  set +a
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+    export "$line"
+  done < "$env_file"
 fi
 
 export KLEIN_LOG_DIR="${KLEIN_LOG_DIR:-${release_dir}/logs}"
