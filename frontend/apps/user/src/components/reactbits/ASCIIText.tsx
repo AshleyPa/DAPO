@@ -39,6 +39,8 @@ type ASCIITextProps = {
   asciiFontSize?: number;
   textFontSize?: number;
   textColor?: string;
+  strokeColor?: string;
+  strokeWidth?: number;
   planeBaseHeight?: number;
   enableWaves?: boolean;
 };
@@ -154,7 +156,13 @@ class CanvasText {
   private readonly context: CanvasRenderingContext2D;
   private readonly fontFamily = '"IBM Plex Mono", "Courier New", monospace';
 
-  constructor(private readonly text: string, private readonly fontSize: number, private readonly color: string) {
+  constructor(
+    private readonly text: string,
+    private readonly fontSize: number,
+    private readonly color: string,
+    private readonly strokeColor: string,
+    private readonly strokeWidth: number,
+  ) {
     const context = this.canvas.getContext('2d');
     if (!context) throw new Error('Canvas 2D context is unavailable');
     this.context = context;
@@ -163,8 +171,9 @@ class CanvasText {
   resize() {
     this.context.font = this.font;
     const metrics = this.context.measureText(this.text);
-    this.canvas.width = Math.ceil(metrics.width) + 28;
-    this.canvas.height = Math.ceil(metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent) + 28;
+    const pad = 28 + Math.ceil(Math.max(0, this.strokeWidth) * 2);
+    this.canvas.width = Math.ceil(metrics.width) + pad;
+    this.canvas.height = Math.ceil(metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent) + pad;
   }
 
   render() {
@@ -172,7 +181,17 @@ class CanvasText {
     this.context.fillStyle = this.color;
     this.context.font = this.font;
     const metrics = this.context.measureText(this.text);
-    this.context.fillText(this.text, 14, 14 + metrics.actualBoundingBoxAscent);
+    const offset = 14 + Math.max(0, this.strokeWidth);
+    const x = offset;
+    const y = offset + metrics.actualBoundingBoxAscent;
+    if (this.strokeColor && this.strokeWidth > 0) {
+      this.context.strokeStyle = this.strokeColor;
+      this.context.lineWidth = this.strokeWidth;
+      this.context.lineJoin = 'round';
+      this.context.miterLimit = 2;
+      this.context.strokeText(this.text, x, y);
+    }
+    this.context.fillText(this.text, x, y);
   }
 
   get aspect() {
@@ -206,7 +225,7 @@ class CanvAscii {
     this.camera = new THREE.PerspectiveCamera(45, this.width / this.height, 1, 1000);
     this.camera.position.z = 30;
 
-    this.textCanvas = new CanvasText(options.text, options.textFontSize, options.textColor);
+    this.textCanvas = new CanvasText(options.text, options.textFontSize, options.textColor, options.strokeColor, options.strokeWidth);
     this.textCanvas.resize();
     this.textCanvas.render();
     this.texture = new THREE.CanvasTexture(this.textCanvas.canvas);
@@ -310,6 +329,8 @@ export default function ASCIIText({
   asciiFontSize = 8,
   textFontSize = 180,
   textColor = '#fdf9f3',
+  strokeColor = '#7c3aed',
+  strokeWidth = 0,
   planeBaseHeight = 7,
   enableWaves = true,
 }: ASCIITextProps) {
@@ -326,7 +347,7 @@ export default function ASCIIText({
 
     const create = (width: number, height: number) => {
       if (cancelled || asciiRef.current) return;
-      const instance = new CanvAscii({ text, asciiFontSize, textFontSize, textColor, planeBaseHeight, enableWaves }, container, width, height);
+      const instance = new CanvAscii({ text, asciiFontSize, textFontSize, textColor, strokeColor, strokeWidth, planeBaseHeight, enableWaves }, container, width, height);
       asciiRef.current = instance;
       instance.load();
       resizeObserver = new ResizeObserver((entries) => {
@@ -360,7 +381,7 @@ export default function ASCIIText({
       asciiRef.current?.dispose();
       asciiRef.current = null;
     };
-  }, [asciiFontSize, enableWaves, planeBaseHeight, text, textColor, textFontSize]);
+  }, [asciiFontSize, enableWaves, planeBaseHeight, strokeColor, strokeWidth, text, textColor, textFontSize]);
 
   return <div ref={containerRef} className="ascii-text-container" aria-hidden="true" />;
 }

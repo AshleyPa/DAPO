@@ -436,16 +436,16 @@ export default function CreateStudioPage() {
         <Galaxy
           mouseRepulsion
           mouseInteraction
-          density={1}
-          glowIntensity={0.4}
-          saturation={0.4}
-          hueShift={80}
-          twinkleIntensity={0.3}
-          rotationSpeed={0.1}
+          density={0.16}
+          glowIntensity={0.22}
+          saturation={0}
+          hueShift={310}
+          twinkleIntensity={0.16}
+          rotationSpeed={0.08}
           repulsionStrength={2}
           autoCenterRepulsion={0}
-          starSpeed={0.8}
-          speed={0.7}
+          starSpeed={0.5}
+          speed={1}
         />
       </div>
 
@@ -712,7 +712,16 @@ function DevelopmentStage({
           ) : (
             <div className="dapo-ascii-stage">
               <Suspense fallback={null}>
-                <ASCIIText text="让每一个灵感显影" enableWaves asciiFontSize={8} />
+                <ASCIIText
+                  text="让每一个灵感显影"
+                  enableWaves
+                  asciiFontSize={7}
+                  textFontSize={220}
+                  textColor="#f8fbff"
+                  strokeColor="#7c3aed"
+                  strokeWidth={10}
+                  planeBaseHeight={8.2}
+                />
               </Suspense>
             </div>
           )}

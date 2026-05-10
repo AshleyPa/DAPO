@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/kleinai/backend/internal/dto"
 	"github.com/kleinai/backend/internal/model"
@@ -190,6 +191,32 @@ func (s *AdminUserService) AdjustPoints(ctx context.Context, id uint64, req *dto
 		return nil, errcode.DBError.Wrap(err)
 	}
 	return &dto.AdminUserAdjustPointsResp{PointsBefore: log.PointsBefore, PointsAfter: log.PointsAfter}, nil
+}
+
+func (s *AdminUserService) Archive(ctx context.Context, id uint64) error {
+	if id == 0 {
+		return errcode.InvalidParam
+	}
+	if _, err := s.users.GetByID(ctx, id); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errcode.UserNotFound
+		}
+		return errcode.DBError.Wrap(err)
+	}
+	now := time.Now().UTC()
+	archivedName := fmt.Sprintf("archived_user_%d_%s", id, now.Format("20060102150405"))
+	fields := map[string]any{
+		"email":         nil,
+		"phone":         nil,
+		"username":      archivedName,
+		"status":        int8(0),
+		"token_version": gorm.Expr("token_version + 1"),
+		"deleted_at":    &now,
+	}
+	if err := s.users.Update(ctx, id, fields); err != nil {
+		return errcode.DBError.Wrap(err)
+	}
+	return nil
 }
 
 func adminUserToResp(u *model.User) *dto.AdminUserResp {

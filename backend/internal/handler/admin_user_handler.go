@@ -90,3 +90,16 @@ func (h *AdminUserHandler) AdjustPoints(c *gin.Context) {
 	}
 	response.OK(c, res)
 }
+
+func (h *AdminUserHandler) Archive(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	if err := h.svc.Archive(c.Request.Context(), id); err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, gin.H{"archived": true})
+}

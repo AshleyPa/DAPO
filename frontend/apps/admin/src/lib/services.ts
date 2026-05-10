@@ -89,6 +89,7 @@ export const usersApi = {
     request<void>({ url: `/users/${id}`, method: 'PUT', data: body }),
   adjustPoints: (id: number, body: AdminUserAdjustPointsBody) =>
     request<AdminUserAdjustPointsResp>({ url: `/users/${id}/points`, method: 'POST', data: body }),
+  archive: (id: number) => request<{ archived: boolean }>({ url: `/users/${id}`, method: 'DELETE' }),
 };
 
 export interface GenerationLogListQuery {

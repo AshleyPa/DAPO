@@ -101,6 +101,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 			users.POST("", userH.Create)
 			users.PUT("/:id", userH.Update)
 			users.POST("/:id/points", superOnly, userH.AdjustPoints)
+			users.DELETE("/:id", superOnly, userH.Archive)
 		}
 
 		acc := authed.Group("/accounts")

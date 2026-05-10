@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Ban, CheckCircle2, MinusCircle, Pencil, Plus, PlusCircle, RefreshCw, Search } from 'lucide-react';
+import { Ban, CheckCircle2, MinusCircle, Pencil, Plus, PlusCircle, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { ApiError } from '../../lib/api';
@@ -55,6 +55,17 @@ export default function UsersPage() {
     onSuccess: () => { refresh(); toast.success('已更新用户状态'); },
     onError: (e: ApiError) => toast.error(e.message),
   });
+  const archive = useMutation({
+    mutationFn: (row: AdminUserItem) => usersApi.archive(row.id),
+    onSuccess: () => { refresh(); toast.success('已归档用户，原邮箱/手机号已释放'); },
+    onError: (e: ApiError) => toast.error(e.message),
+  });
+
+  const confirmArchive = (row: AdminUserItem) => {
+    const label = userName(row);
+    const ok = window.confirm(`归档用户「${label}」？\n\n此操作会禁用账号、踢下线，并释放邮箱/手机号用于重新注册。历史订单、积分流水和生成记录会保留用于审计。`);
+    if (ok) archive.mutate(row);
+  };
 
   return (
     <div className="page page-wide space-y-4">
@@ -168,6 +179,13 @@ export default function UsersPage() {
                     >
                       {u.status === 1 ? <Ban size={14} /> : <CheckCircle2 size={14} />}
                       {u.status === 1 ? '暂停' : '启用'}
+                    </button>
+                    <button
+                      className="btn btn-danger-ghost btn-sm"
+                      disabled={archive.isPending}
+                      onClick={() => confirmArchive(u)}
+                    >
+                      <Trash2 size={14} /> 删除
                     </button>
                   </div>
                 </td>
