@@ -271,12 +271,19 @@ func (s *RechargeService) CancelUserOrder(ctx context.Context, userID uint64, or
 		}
 		closeRes, err := client.Close(ctx, row.OrderNo)
 		if err != nil {
-			logger.FromCtx(ctx).Warn("alipay.cancel.close_failed", zap.String("order_no", row.OrderNo), zap.Error(err))
-			return nil, errcode.Internal.WithMsg("支付宝订单取消失败，请稍后重试")
+			if isAlipayTradeNotExistError(err) {
+				extra["alipay_close_failed_at"] = time.Now().UTC().Format(time.RFC3339)
+				extra["alipay_close_error"] = err.Error()
+				extra["alipay_close_remote_missing"] = true
+			} else {
+				logger.FromCtx(ctx).Warn("alipay.cancel.close_failed", zap.String("order_no", row.OrderNo), zap.Error(err))
+				return nil, errcode.Internal.WithMsg("支付宝订单取消失败，请稍后重试")
+			}
+		} else {
+			extra["alipay_close_at"] = time.Now().UTC().Format(time.RFC3339)
+			extra["alipay_close_out_trade_no"] = closeRes.OutTradeNo
+			extra["alipay_close_trade_no"] = closeRes.TradeNo
 		}
-		extra["alipay_close_at"] = time.Now().UTC().Format(time.RFC3339)
-		extra["alipay_close_out_trade_no"] = closeRes.OutTradeNo
-		extra["alipay_close_trade_no"] = closeRes.TradeNo
 	}
 
 	merged := mergeExtra(row.Extra, extra)
@@ -778,6 +785,10 @@ func (s *RechargeService) closeExpiredPendingAlipayOrder(ctx context.Context, ro
 		logger.FromCtx(ctx).Warn("alipay.close.failed", zap.String("order_no", row.OrderNo), zap.Error(err))
 		extra["alipay_close_failed_at"] = now.Format(time.RFC3339)
 		extra["alipay_close_error"] = err.Error()
+		if isAlipayTradeNotExistError(err) {
+			extra["alipay_close_remote_missing"] = true
+			return s.expirePendingOrder(ctx, row, extra)
+		}
 		merged := mergeExtra(row.Extra, extra)
 		_, updateErr := s.repo.UpdateIfStatus(ctx, row.ID, model.RechargeStatusPending, map[string]any{"extra": merged})
 		if updateErr != nil {
@@ -790,6 +801,10 @@ func (s *RechargeService) closeExpiredPendingAlipayOrder(ctx context.Context, ro
 	extra["alipay_close_out_trade_no"] = closeRes.OutTradeNo
 	extra["alipay_close_trade_no"] = closeRes.TradeNo
 	return s.expirePendingOrder(ctx, row, extra)
+}
+
+func isAlipayTradeNotExistError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "ACQ.TRADE_NOT_EXIST")
 }
 
 func (s *RechargeService) expirePendingOrder(ctx context.Context, row *model.RechargeRecord, extraFields map[string]any) (*model.RechargeRecord, error) {

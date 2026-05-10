@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -34,5 +35,14 @@ func TestValidateAlipayTradeNoRejectsMismatch(t *testing.T) {
 	}
 	if err := validateAlipayTradeNo(&stored, ""); err != nil {
 		t.Fatalf("empty notify trade_no should be allowed, got %v", err)
+	}
+}
+
+func TestIsAlipayTradeNotExistError(t *testing.T) {
+	if !isAlipayTradeNotExistError(errors.New("alipay: close failed: ACQ.TRADE_NOT_EXIST: 交易不存在")) {
+		t.Fatalf("expected ACQ.TRADE_NOT_EXIST to be recognized")
+	}
+	if isAlipayTradeNotExistError(errors.New("alipay: close failed: ACQ.SYSTEM_ERROR: 系统繁忙")) {
+		t.Fatalf("non missing trade error should not be recognized")
 	}
 }

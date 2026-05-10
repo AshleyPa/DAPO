@@ -1,4 +1,4 @@
-import type { MouseEvent } from 'react';
+import { useEffect, type MouseEvent } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   Clock3,
@@ -37,10 +37,17 @@ const NAV_ITEMS: NavItem[] = [
 export function AppLayout() {
   const token = useAuthStore((s) => s.token);
   const me = useAuthStore((s) => s.me);
+  const refreshMe = useAuthStore((s) => s.refreshMe);
   const logout = useAuthStore((s) => s.logout);
   const openGate = useLoginGateStore((s) => s.openGate);
   const navigate = useNavigate();
   const isAuthed = !!token;
+
+  useEffect(() => {
+    if (token && !me) {
+      void refreshMe();
+    }
+  }, [me, refreshMe, token]);
 
   const onLogout = async () => {
     await logout();
