@@ -346,13 +346,7 @@ func (s *AccountTestService) probeOpenAICompatibleImageEndpoint(ctx context.Cont
 }
 
 func openAICompatibleModelsEndpoint(base string) string {
-	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if base == "" {
-		base = "https://api.openai.com"
-	}
-	if strings.HasSuffix(base, "/v1/models") {
-		return base
-	}
+	base = normalizeOpenAICompatibleBase(base)
 	if strings.HasSuffix(base, "/v1") {
 		return base + "/models"
 	}
@@ -360,13 +354,7 @@ func openAICompatibleModelsEndpoint(base string) string {
 }
 
 func openAICompatibleImageEndpoint(base string) string {
-	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if base == "" {
-		base = "https://api.openai.com"
-	}
-	if strings.HasSuffix(base, "/images/generations") {
-		return base
-	}
+	base = normalizeOpenAICompatibleBase(base)
 	if strings.HasSuffix(base, "/v1") {
 		return base + "/images/generations"
 	}
@@ -374,17 +362,39 @@ func openAICompatibleImageEndpoint(base string) string {
 }
 
 func openAICompatibleChatEndpoint(base string) string {
-	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if base == "" {
-		base = "https://api.openai.com"
-	}
-	if strings.HasSuffix(base, "/chat/completions") {
-		return base
-	}
+	base = normalizeOpenAICompatibleBase(base)
 	if strings.HasSuffix(base, "/v1") {
 		return base + "/chat/completions"
 	}
 	return base + "/v1/chat/completions"
+}
+
+func normalizeOpenAICompatibleBase(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return "https://api.openai.com"
+	}
+
+	endpointSuffixes := []string{
+		"/v1/models",
+		"/v1/images/generations",
+		"/v1/chat/completions",
+		"/v1/responses",
+		"/models",
+		"/images/generations",
+		"/chat/completions",
+		"/responses",
+	}
+	for _, suffix := range endpointSuffixes {
+		if strings.HasSuffix(base, suffix) {
+			base = strings.TrimRight(strings.TrimSuffix(base, suffix), "/")
+			if base == "" {
+				return "https://api.openai.com"
+			}
+			return base
+		}
+	}
+	return base
 }
 
 func openAICompatibleAuthFailure(msg string) bool {

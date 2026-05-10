@@ -468,7 +468,7 @@ export default function TokenAccountsPage() {
               const CheckIcon = check.icon;
               const expire = expireState(item.access_token_expire_at);
               const lastError = item.last_test_status === 1 ? '' : (item.last_error || '').trim();
-              const testError = (item.last_test_error || '').trim();
+              const testError = item.last_test_status === 1 ? '' : (item.last_test_error || '').trim();
               const statusErrorText = [lastError, testError].filter(Boolean).join('\n\n');
               const needsAttention = isOAuth && (!item.has_access_token || item.last_test_status === 2 || !!testError);
 

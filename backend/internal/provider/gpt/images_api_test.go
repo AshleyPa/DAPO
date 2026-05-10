@@ -71,6 +71,8 @@ func TestImageGenerationEndpointAvoidsDuplicateV1(t *testing.T) {
 		{base: "https://example.test/v1", want: "https://example.test/v1/images/generations"},
 		{base: "https://example.test/v1/", want: "https://example.test/v1/images/generations"},
 		{base: "https://example.test/v1/images/generations", want: "https://example.test/v1/images/generations"},
+		{base: "https://example.test/v1/chat/completions", want: "https://example.test/v1/images/generations"},
+		{base: "https://example.test/v1/models", want: "https://example.test/v1/images/generations"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.base, func(t *testing.T) {
@@ -90,6 +92,8 @@ func TestResponseEndpointAvoidsDuplicateV1(t *testing.T) {
 		{base: "https://example.test/v1", want: "https://example.test/v1/responses"},
 		{base: "https://example.test/v1/", want: "https://example.test/v1/responses"},
 		{base: "https://example.test/v1/responses", want: "https://example.test/v1/responses"},
+		{base: "https://example.test/v1/chat/completions", want: "https://example.test/v1/responses"},
+		{base: "https://example.test/v1/images/generations", want: "https://example.test/v1/responses"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.base, func(t *testing.T) {

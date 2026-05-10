@@ -31,6 +31,20 @@ func TestOpenAICompatibleEndpointBuildersAvoidDuplicateV1(t *testing.T) {
 			wantImages: "https://example.test/v1/images/generations",
 			wantChat:   "https://example.test/v1/chat/completions",
 		},
+		{
+			name:       "full chat endpoint pasted as base",
+			base:       "https://example.test/v1/chat/completions",
+			wantModels: "https://example.test/v1/models",
+			wantImages: "https://example.test/v1/images/generations",
+			wantChat:   "https://example.test/v1/chat/completions",
+		},
+		{
+			name:       "full image endpoint pasted as base",
+			base:       "https://example.test/v1/images/generations",
+			wantModels: "https://example.test/v1/models",
+			wantImages: "https://example.test/v1/images/generations",
+			wantChat:   "https://example.test/v1/chat/completions",
+		},
 	}
 
 	for _, tc := range cases {

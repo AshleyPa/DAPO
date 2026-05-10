@@ -466,10 +466,7 @@ func (p *Provider) generateImage2Web(ctx context.Context, req *provider.Request)
 }
 
 func imageGenerationEndpoint(base string) string {
-	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if strings.HasSuffix(base, "/images/generations") {
-		return base
-	}
+	base = normalizeOpenAICompatibleBase(base)
 	if strings.HasSuffix(base, "/v1") {
 		return base + "/images/generations"
 	}
@@ -1798,13 +1795,7 @@ func mainModelForImage2(model string) string {
 }
 
 func responseEndpoint(base string) string {
-	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if base == "" {
-		base = defaultBaseURL
-	}
-	if strings.HasSuffix(base, "/responses") {
-		return base
-	}
+	base = normalizeOpenAICompatibleBase(base)
 	if strings.Contains(base, "/backend-api/codex") {
 		return base + "/responses"
 	}
@@ -1812,6 +1803,33 @@ func responseEndpoint(base string) string {
 		return base + "/responses"
 	}
 	return base + "/v1/responses"
+}
+
+func normalizeOpenAICompatibleBase(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return defaultBaseURL
+	}
+	endpointSuffixes := []string{
+		"/v1/models",
+		"/v1/images/generations",
+		"/v1/chat/completions",
+		"/v1/responses",
+		"/models",
+		"/images/generations",
+		"/chat/completions",
+		"/responses",
+	}
+	for _, suffix := range endpointSuffixes {
+		if strings.HasSuffix(base, suffix) {
+			base = strings.TrimRight(strings.TrimSuffix(base, suffix), "/")
+			if base == "" {
+				return defaultBaseURL
+			}
+			return base
+		}
+	}
+	return base
 }
 
 func isCodexBase(base string) bool {
