@@ -7,7 +7,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 service="$1"
-release_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+release_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="${DAPO_RELEASE_ENV_FILE:-${release_dir}/.env}"
 
 if [[ -f "$env_file" ]]; then
