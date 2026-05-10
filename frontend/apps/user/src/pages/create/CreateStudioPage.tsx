@@ -787,11 +787,12 @@ function ParameterStrip({
 function PromptGalleryRail({ cards, compactMotion, onPick }: { cards: PromptGalleryCard[]; compactMotion: boolean; onPick: (card: PromptGalleryCard) => void }) {
   const items = useMemo(
     () =>
-      cards.map((card) => ({
+      cards.map((card, index) => ({
         id: String(card.id ?? card.title),
         title: card.title,
         subtitle: card.subtitle,
         image: card.image,
+        fallbackImage: promptGalleryFallbackImage(index),
         prompt: card.prompt,
       })),
     [cards],
@@ -1177,6 +1178,11 @@ function promptGalleryItemToCard(item: PromptGalleryItem): PromptGalleryCard {
     image: item.cover_url,
     prompt: item.prompt,
   };
+}
+
+function promptGalleryFallbackImage(index: number) {
+  const fallback = FALLBACK_PROMPT_GALLERY.image[index % FALLBACK_PROMPT_GALLERY.image.length];
+  return fallback?.image ?? '/examples/case-1.jpg';
 }
 
 function modelsByKind(models: PublicModel[] | undefined, kind: PublicModel['kind'], fallback: SelectModel[]): SelectModel[] {

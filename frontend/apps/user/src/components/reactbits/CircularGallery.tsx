@@ -8,6 +8,7 @@ export type CircularGalleryItem = {
   title: string;
   subtitle?: string;
   image: string;
+  fallbackImage?: string;
   prompt?: string;
 };
 
@@ -239,13 +240,42 @@ class Media {
     this.plane = new Mesh(this.gl, { geometry: this.geometry, program });
     this.plane.setParent(this.scene);
 
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = this.item.image;
-    img.onload = () => {
+    const setTextureImage = (img: HTMLImageElement | HTMLCanvasElement, width: number, height: number) => {
       texture.image = img;
-      program.uniforms.uImageSizes.value = [img.naturalWidth, img.naturalHeight];
+      program.uniforms.uImageSizes.value = [width, height];
     };
+    const setCanvasFallback = () => {
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      canvas.width = 900;
+      canvas.height = 1200;
+      if (context) {
+        const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
+        gradient.addColorStop(0, '#17131f');
+        gradient.addColorStop(0.55, '#252034');
+        gradient.addColorStop(1, '#08070b');
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.strokeStyle = 'rgba(255,255,255,0.2)';
+        context.lineWidth = 10;
+        context.strokeRect(46, 46, canvas.width - 92, canvas.height - 92);
+      }
+      setTextureImage(canvas, canvas.width, canvas.height);
+    };
+    const loadImage = (src: string, allowFallback: boolean) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => setTextureImage(img, img.naturalWidth, img.naturalHeight);
+      img.onerror = () => {
+        if (allowFallback && this.item.fallbackImage && this.item.fallbackImage !== src) {
+          loadImage(this.item.fallbackImage, false);
+          return;
+        }
+        setCanvasFallback();
+      };
+      img.src = src;
+    };
+    loadImage(this.item.image, true);
   }
 
   private createTitle() {
