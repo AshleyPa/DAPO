@@ -275,6 +275,7 @@ class CanvAscii {
     this.height = Math.max(1, height);
     this.camera.aspect = this.width / this.height;
     this.camera.updateProjectionMatrix();
+    this.mouse = { x: this.width / 2, y: this.height / 2 };
     this.filter.setSize(this.width, this.height);
     this.fitMeshToViewport();
   }

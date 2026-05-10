@@ -143,14 +143,35 @@
 
   .dapo-galaxy-layer {
     position: fixed;
-    inset: 0;
+    inset: 64px 0 0;
     z-index: 0;
     overflow: hidden;
     pointer-events: none;
     background:
-      radial-gradient(circle at 50% 10%, rgba(30, 24, 54, .56), transparent 36%),
-      radial-gradient(circle at 50% 64%, rgba(12, 42, 31, .24), transparent 42%),
-      #000;
+      radial-gradient(circle at 50% 38%, rgba(230, 243, 190, .10), transparent 28%),
+      radial-gradient(circle at 50% 62%, rgba(255, 255, 255, .055), transparent 34%),
+      linear-gradient(180deg, rgba(8, 7, 12, .98), rgba(5, 5, 9, .99));
+  }
+
+  .dapo-galaxy-layer::before,
+  .dapo-galaxy-layer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .dapo-galaxy-layer::before {
+    background:
+      radial-gradient(ellipse at 50% 42%, transparent 0 32%, rgba(0, 0, 0, .12) 68%, rgba(0, 0, 0, .28) 100%),
+      linear-gradient(180deg, rgba(0, 0, 0, .18), transparent 16%, transparent 78%, rgba(0, 0, 0, .48));
+  }
+
+  .dapo-galaxy-layer::after {
+    background:
+      linear-gradient(90deg, rgba(0, 0, 0, .22), transparent 18%, transparent 82%, rgba(0, 0, 0, .22)),
+      linear-gradient(180deg, transparent, rgba(0, 0, 0, .34));
   }
 
   .galaxy-container,
@@ -160,7 +181,7 @@
     display: block;
     width: 100%;
     height: 100%;
-    opacity: .68;
+    opacity: .98;
   }
 
   .dapo-stage-frame {
@@ -204,20 +225,26 @@
     max-width: 100%;
     overflow: hidden;
     color: #ffffff;
-    background-image: linear-gradient(90deg, #ffffff 0%, #9fd7ff 18%, #f43f5e 34%, #22c55e 50%, #38bdf8 66%, #f59e0b 82%, #ffffff 100%);
-    background-attachment: scroll;
-    background-size: 210% auto;
-    background-position: 0% 50%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
+    background-image: none;
+    background-attachment: initial;
+    background-size: auto;
+    background-position: initial;
+    -webkit-background-clip: initial;
+    background-clip: initial;
+    -webkit-text-fill-color: #ffffff;
+    -webkit-text-stroke: .18px rgba(255, 255, 255, .68);
+    text-shadow:
+      0 0 1px rgba(255, 255, 255, .92),
+      0 0 9px rgba(125, 211, 252, .58),
+      0 0 18px rgba(168, 85, 247, .42),
+      0 0 30px rgba(244, 114, 182, .22);
     filter:
-      drop-shadow(0 0 3px rgba(255, 255, 255, .50))
-      drop-shadow(0 0 10px rgba(124, 58, 237, .58))
-      drop-shadow(0 0 24px rgba(244, 63, 94, .28));
+      drop-shadow(0 0 3px rgba(255, 255, 255, .58))
+      drop-shadow(0 0 12px rgba(125, 211, 252, .36))
+      drop-shadow(0 0 24px rgba(168, 85, 247, .20));
     mix-blend-mode: normal;
     opacity: .98;
-    animation: dapo-ascii-prism 4.8s ease-in-out infinite alternate;
+    animation: dapo-ascii-edge-glow 5.8s ease-in-out infinite alternate;
   }
 
   .border-glow {
@@ -327,6 +354,40 @@
 
   .dapo-composer-card {
     min-width: 0;
+    overflow: hidden;
+  }
+
+  .dapo-composer-glow {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .dapo-prompt-panel,
+  .dapo-composer-controls,
+  .dapo-composer-options {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .composer-select {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .composer-select--wide {
+    flex-basis: 170px;
+  }
+
+  .composer-select > button span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .studio-prompt {
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 
   .dapo-result-shell {
@@ -380,96 +441,31 @@
   }
 
   .circular-gallery {
+    position: relative;
+    height: clamp(260px, 32vw, 430px);
+    width: 100%;
     overflow: hidden;
-    perspective: 900px;
+    border-radius: 0;
   }
 
-  .circular-gallery__track {
-    display: grid;
-    grid-auto-columns: clamp(116px, 18vw, 178px);
-    grid-auto-flow: column;
-    gap: 10px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 4px 2px 12px;
+  .circular-gallery__viewport {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
     cursor: grab;
-    scroll-snap-type: x mandatory;
-    scrollbar-width: none;
-    touch-action: pan-x;
+    touch-action: pan-y;
   }
 
-  .circular-gallery__track:active {
+  .circular-gallery__viewport:active {
     cursor: grabbing;
   }
 
-  .circular-gallery__track::-webkit-scrollbar {
-    display: none;
-  }
-
-  .circular-gallery__card {
-    position: relative;
-    aspect-ratio: 4 / 5;
-    overflow: hidden;
-    border: 1px solid rgba(16, 19, 24, .08);
-    border-radius: 8px;
-    background: #e9edf2;
-    scroll-snap-align: center;
-    transform-origin: center;
-    transition: transform 260ms cubic-bezier(.22, 1, .36, 1), opacity 260ms ease, box-shadow 260ms ease;
-    box-shadow: 0 10px 26px rgba(16, 24, 40, .10);
-  }
-
-  .circular-gallery__card img {
+  .circular-gallery__viewport canvas {
     position: absolute;
     inset: 0;
     height: 100%;
     width: 100%;
-    object-fit: cover;
-    transition: transform 520ms cubic-bezier(.22, 1, .36, 1);
-    pointer-events: none;
-  }
-
-  .circular-gallery__card:hover {
-    box-shadow: 0 18px 40px rgba(16, 24, 40, .16);
-  }
-
-  .circular-gallery__card:hover img {
-    transform: scale(1.05);
-  }
-
-  .circular-gallery__shade {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(180deg, transparent 25%, rgba(0, 0, 0, .72) 100%);
-    pointer-events: none;
-  }
-
-  .circular-gallery__label {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: 1;
-    padding: 10px;
-    color: #fff;
-    text-align: left;
-  }
-
-  .circular-gallery__label span {
     display: block;
-    font-size: 13px;
-    line-height: 1.35;
-  }
-
-  .circular-gallery__label small {
-    display: block;
-    margin-top: 2px;
-    overflow: hidden;
-    color: rgba(255, 255, 255, .72);
-    font-size: 11px;
-    line-height: 1.3;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .generating-dots {
@@ -603,6 +599,31 @@
   }
 }
 
+@keyframes dapo-ascii-edge-glow {
+  from {
+    text-shadow:
+      0 0 1px rgba(255, 255, 255, .92),
+      0 0 8px rgba(125, 211, 252, .52),
+      0 0 18px rgba(168, 85, 247, .36),
+      0 0 28px rgba(244, 114, 182, .16);
+    filter:
+      drop-shadow(0 0 3px rgba(255, 255, 255, .56))
+      drop-shadow(0 0 12px rgba(125, 211, 252, .34))
+      drop-shadow(0 0 22px rgba(168, 85, 247, .18));
+  }
+  to {
+    text-shadow:
+      0 0 1px rgba(255, 255, 255, .98),
+      0 0 10px rgba(196, 181, 253, .48),
+      0 0 20px rgba(244, 114, 182, .34),
+      0 0 34px rgba(34, 211, 238, .18);
+    filter:
+      drop-shadow(0 0 4px rgba(255, 255, 255, .62))
+      drop-shadow(0 0 13px rgba(196, 181, 253, .30))
+      drop-shadow(0 0 26px rgba(244, 114, 182, .18));
+  }
+}
+
 /* Final user-app typography pass: this front end should feel light and quiet.
    Override Tailwind font weight utilities that individual pages still use. */
 #root :where(
@@ -659,6 +680,54 @@
 }
 
 @media (max-width: 720px) {
+  .dapo-galaxy-layer {
+    inset: 124px 0 0;
+  }
+
+  .dapo-stage-frame {
+    min-height: clamp(270px, 72vw, 430px);
+  }
+
+  .dapo-ascii-stage .ascii-text-container pre {
+    font-size: clamp(5px, 1.8vw, 7px) !important;
+  }
+
+  .circular-gallery {
+    height: clamp(250px, 62vw, 360px);
+  }
+
+  .dapo-composer-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .dapo-composer-options > button,
+  .composer-select {
+    width: 100%;
+  }
+
+  .composer-select--wide {
+    grid-column: 1 / -1;
+  }
+
+  .dapo-composer-controls {
+    min-width: 0;
+  }
+
+  .dapo-composer-controls > div:last-child {
+    display: grid;
+    grid-template-columns: 1fr 44px;
+    flex-shrink: 1;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .dapo-composer-controls > div:last-child button:last-child {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
   .dapo-param-strip {
     display: flex;
     overflow-x: auto;
@@ -672,5 +741,15 @@
 
   .dapo-param-strip__item {
     min-width: 136px;
+  }
+}
+
+@media (max-width: 420px) {
+  .dapo-composer-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .composer-select--wide {
+    grid-column: auto;
   }
 }

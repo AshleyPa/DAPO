@@ -436,12 +436,12 @@ export default function CreateStudioPage() {
         <Galaxy
           mouseRepulsion
           mouseInteraction
-          density={0.16}
-          glowIntensity={0.22}
-          saturation={0}
-          hueShift={310}
-          twinkleIntensity={0.16}
-          rotationSpeed={0.08}
+          density={1}
+          glowIntensity={0.4}
+          saturation={0.2}
+          hueShift={30}
+          twinkleIntensity={0.3}
+          rotationSpeed={0.1}
           repulsionStrength={2}
           autoCenterRepulsion={0}
           starSpeed={0.5}
@@ -481,7 +481,7 @@ export default function CreateStudioPage() {
                 <PromptGalleryRail cards={promptGalleryCards} onPick={fillPromptFromCard} />
               </div>
 
-              <div className="rounded-[8px] border border-[#d7dde5] bg-[#fbfcfd] p-3 sm:p-4">
+              <div className="dapo-prompt-panel rounded-[8px] border border-[#d7dde5] bg-[#fbfcfd] p-3 sm:p-4">
               <textarea
                 ref={promptRef}
                 value={prompt}
@@ -509,8 +509,8 @@ export default function CreateStudioPage() {
                 </div>
               )}
 
-              <div className="mt-4 flex flex-col gap-3 border-t border-[#e6e9ee] pt-4 xl:flex-row xl:items-center xl:justify-between">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <div className="dapo-composer-controls mt-4 flex flex-col gap-3 border-t border-[#e6e9ee] pt-4 xl:flex-row xl:items-center xl:justify-between">
+                <div className="dapo-composer-options flex min-w-0 flex-wrap items-center gap-2">
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -715,12 +715,12 @@ function DevelopmentStage({
                 <ASCIIText
                   text="让每一个灵感显影"
                   enableWaves
-                  asciiFontSize={7}
-                  textFontSize={220}
-                  textColor="#f8fbff"
-                  strokeColor="#7c3aed"
-                  strokeWidth={10}
-                  planeBaseHeight={8.2}
+                  asciiFontSize={6}
+                  textFontSize={180}
+                  textColor="#ffffff"
+                  strokeColor="#7dd3fc"
+                  strokeWidth={8}
+                  planeBaseHeight={7.2}
                 />
               </Suspense>
             </div>
@@ -767,13 +767,17 @@ function ParameterStrip({
 }
 
 function PromptGalleryRail({ cards, onPick }: { cards: PromptGalleryCard[]; onPick: (card: PromptGalleryCard) => void }) {
-  const items = cards.map((card) => ({
-    id: String(card.id ?? card.title),
-    title: card.title,
-    subtitle: card.subtitle,
-    image: card.image,
-    prompt: card.prompt,
-  }));
+  const items = useMemo(
+    () =>
+      cards.map((card) => ({
+        id: String(card.id ?? card.title),
+        title: card.title,
+        subtitle: card.subtitle,
+        image: card.image,
+        prompt: card.prompt,
+      })),
+    [cards],
+  );
 
   return (
     <div className="mt-4">
@@ -783,6 +787,12 @@ function PromptGalleryRail({ cards, onPick }: { cards: PromptGalleryCard[]; onPi
       </div>
       <CircularGallery
         items={items}
+        bend={-1}
+        borderRadius={0.11}
+        scrollSpeed={2.3}
+        scrollEase={0.04}
+        textColor="#ffffff"
+        font="bold 30px Figtree"
         onSelect={(item) => {
           if (!item.prompt) return;
           onPick({
@@ -803,7 +813,7 @@ function ComposerSelect({ value, options, onChange, disabled, wide }: { value: s
 
   return (
     <div
-      className="relative"
+      className={clsx('composer-select relative min-w-0', wide && 'composer-select--wide')}
       onBlur={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
       }}
@@ -813,7 +823,7 @@ function ComposerSelect({ value, options, onChange, disabled, wide }: { value: s
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
         className={clsx(
-          'inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#2156d9] outline-none transition',
+          'inline-flex h-9 w-full max-w-full items-center gap-1.5 rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#2156d9] outline-none transition',
           wide && 'min-w-[150px] justify-between',
           open ? 'border-[#a9b8f4] bg-[#f6f8ff]' : 'hover:border-[#b8c0cc]',
           disabled && 'cursor-not-allowed text-[#98a2b3] hover:border-[#d7dde5]',
@@ -841,7 +851,7 @@ function ComposerSelect({ value, options, onChange, disabled, wide }: { value: s
                   selected ? 'bg-[#f1f4f8] text-[#101318]' : 'text-[#667085] hover:bg-[#f6f7f8] hover:text-[#101318]',
                 )}
               >
-                <span>{o.label}</span>
+                <span className="min-w-0 truncate">{o.label}</span>
                 {selected && <Check size={16} />}
               </button>
             );
