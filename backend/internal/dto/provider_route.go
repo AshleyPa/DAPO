@@ -64,6 +64,7 @@ type ProviderRouteTestResp struct {
 	Provider          string                       `json:"provider"`
 	UpstreamModel     string                       `json:"upstream_model"`
 	AuthType          string                       `json:"auth_type,omitempty"`
+	ImageAPIMode      string                       `json:"image_api_mode,omitempty"`
 	Strategy          string                       `json:"strategy"`
 	MatchedConfig     bool                         `json:"matched_config"`
 	MatchedKind       string                       `json:"matched_kind,omitempty"`
@@ -80,6 +81,7 @@ type ProviderRouteCandidateResp struct {
 	Provider          string `json:"provider"`
 	UpstreamModel     string `json:"upstream_model"`
 	AuthType          string `json:"auth_type,omitempty"`
+	ImageAPIMode      string `json:"image_api_mode,omitempty"`
 	Strategy          string `json:"strategy"`
 	CandidateAccounts int    `json:"candidate_accounts"`
 	AvailableAccounts int    `json:"available_accounts"`

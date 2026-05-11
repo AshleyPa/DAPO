@@ -26,6 +26,7 @@ import (
 	_ "image/png"
 	"io"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -44,6 +45,18 @@ import (
 const (
 	defaultBaseURL = "https://api.openai.com"
 	defaultTimeout = 6 * time.Minute
+)
+
+const (
+	imageAPIModeParam        = "image_api_mode"
+	routeImageAPIModeParam   = "_provider_route_image_api_mode"
+	imageAPIModeAuto         = "auto"
+	imageAPIModeResponses    = "openai_responses"
+	imageAPIModeImages       = "openai_images"
+	imageAPIModePic2API      = "pic2api"
+	imageAPIModeNovaAsync    = "nova_async"
+	novaDefaultPollInterval  = 2 * time.Second
+	novaDefaultPollMaxWindow = 4 * time.Minute
 )
 
 // Provider 实现 provider.Provider。
@@ -153,6 +166,22 @@ func (p *Provider) Generate(ctx context.Context, req *provider.Request) (*provid
 		return nil, fmt.Errorf("gpt provider missing credential")
 	}
 	if isGPTImage2(req.ModelCode) {
+		switch mode := imageAPIAdapterMode(req); mode {
+		case imageAPIModeNovaAsync:
+			return p.generateImage2NovaAsync(ctx, req)
+		case imageAPIModePic2API:
+			if len(cleanReferenceImages(req.RefAssets)) > 0 {
+				return p.generateImage2Pic2APIChat(ctx, req)
+			}
+			return p.generateImage2ImagesAPI(ctx, req)
+		case imageAPIModeImages:
+			if len(cleanReferenceImages(req.RefAssets)) > 0 {
+				return p.generateImage2ImageEditsAPI(ctx, req)
+			}
+			return p.generateImage2ImagesAPI(ctx, req)
+		case imageAPIModeResponses:
+			return p.generateImage2(ctx, req)
+		}
 		if shouldUseWebImage2(req) {
 			return p.generateImage2Web(ctx, req)
 		}
@@ -471,6 +500,22 @@ func imageGenerationEndpoint(base string) string {
 		return base + "/images/generations"
 	}
 	return base + "/v1/images/generations"
+}
+
+func imageEditEndpoint(base string) string {
+	base = normalizeOpenAICompatibleBase(base)
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/images/edits"
+	}
+	return base + "/v1/images/edits"
+}
+
+func chatCompletionEndpoint(base string) string {
+	base = normalizeOpenAICompatibleBase(base)
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/chat/completions"
+	}
+	return base + "/v1/chat/completions"
 }
 
 func (p *Provider) generateImage2(ctx context.Context, req *provider.Request) (*provider.Result, error) {
@@ -826,6 +871,30 @@ type imageGenerationTaskResp struct {
 	} `json:"error"`
 }
 
+type novaPredictionResp struct {
+	ID      string `json:"id"`
+	TaskID  string `json:"task_id"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	URL     string `json:"url"`
+	Data    []struct {
+		URL     string `json:"url"`
+		B64JSON string `json:"b64_json"`
+	} `json:"data"`
+	Results []struct {
+		Data []struct {
+			Outputs []struct {
+				URL     string `json:"url"`
+				B64JSON string `json:"b64_json"`
+			} `json:"outputs"`
+		} `json:"data"`
+	} `json:"results"`
+	Error *struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	} `json:"error"`
+}
+
 func (p *Provider) generateImage2ImagesAPI(ctx context.Context, req *provider.Request) (*provider.Result, error) {
 	base := strings.TrimRight(req.BaseURL, "/")
 	if base == "" {
@@ -836,7 +905,7 @@ func (p *Provider) generateImage2ImagesAPI(ctx context.Context, req *provider.Re
 	if count <= 0 {
 		count = 1
 	}
-	size := imageSize(req.Params, "1024x1024")
+	size := imagesAPIRequestSize(req)
 	quality := imagesAPIQuality(req.Params)
 	body := map[string]any{
 		"model":  imageToolModel(req.ModelCode),
@@ -929,6 +998,337 @@ func (p *Provider) generateImage2ImagesAPI(ctx context.Context, req *provider.Re
 		Stage:    "images_api.success",
 		Method:   "POST",
 		URL:      url,
+		Meta:     map[string]any{"assets": len(assets), "latency_ms": time.Since(start).Milliseconds()},
+	})
+	return &provider.Result{TaskID: req.TaskID, Assets: assets, Latency: time.Since(start)}, nil
+}
+
+func (p *Provider) generateImage2ImageEditsAPI(ctx context.Context, req *provider.Request) (*provider.Result, error) {
+	base := strings.TrimRight(req.BaseURL, "/")
+	if base == "" {
+		base = p.defaultURL
+	}
+	url := imageEditEndpoint(base)
+	count := req.Count
+	if count <= 0 {
+		count = 1
+	}
+	size := imagesAPIRequestSize(req)
+	quality := imagesAPIQuality(req.Params)
+	refs := cleanReferenceImages(req.RefAssets)
+	if len(refs) == 0 {
+		return p.generateImage2ImagesAPI(ctx, req)
+	}
+	client, err := p.httpClient(req.ProxyURL)
+	if err != nil {
+		return nil, err
+	}
+
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("model", imageToolModel(req.ModelCode))
+	_ = w.WriteField("prompt", req.Prompt)
+	_ = w.WriteField("n", fmt.Sprintf("%d", count))
+	_ = w.WriteField("size", size)
+	_ = w.WriteField("response_format", "url")
+	if quality != "" {
+		_ = w.WriteField("quality", quality)
+	}
+	for i, ref := range refs {
+		raw, mime, err := readRefImage(ctx, client, ref)
+		if err != nil {
+			return nil, fmt.Errorf("gpt image2 images edits reference %d: %w", i+1, err)
+		}
+		field := "image"
+		if i > 0 {
+			field = "image[]"
+		}
+		part, err := w.CreateFormFile(field, imageEditFilename(i, mime))
+		if err != nil {
+			return nil, err
+		}
+		if _, err := part.Write(raw); err != nil {
+			return nil, err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+req.Credential)
+	httpReq.Header.Set("Content-Type", w.FormDataContentType())
+	httpReq.Header.Set("User-Agent", "kleinai/1.0")
+
+	start := time.Now()
+	logUpstream(ctx, req, provider.UpstreamLogEntry{
+		Provider: "gpt",
+		Stage:    "images_edits.start",
+		Method:   "POST",
+		URL:      url,
+		Meta: map[string]any{
+			"model":     req.ModelCode,
+			"size":      size,
+			"quality":   quality,
+			"count":     count,
+			"ref_count": len(refs),
+		},
+	})
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_edits.request", Method: "POST", URL: url, Error: err.Error()})
+		return nil, fmt.Errorf("gpt image2 images edits http: %w", err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_edits.failed", Method: "POST", URL: url, StatusCode: resp.StatusCode, ResponseExcerpt: snippet(raw, 600)})
+		return nil, fmt.Errorf("gpt image2 images edits %d: %s", resp.StatusCode, snippet(raw, 320))
+	}
+	assets, err := openAIImageResponseAssets(raw, size, "images_edits")
+	if err != nil {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_edits.decode", Method: "POST", URL: url, ResponseExcerpt: snippet(raw, 600), Error: err.Error()})
+		return nil, err
+	}
+	if len(assets) == 0 {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "images_edits.failed", Method: "POST", URL: url, ResponseExcerpt: "gpt image2 images edits returned 0 image"})
+		return nil, fmt.Errorf("gpt image2 images edits returned 0 image")
+	}
+	logUpstream(ctx, req, provider.UpstreamLogEntry{
+		Provider: "gpt",
+		Stage:    "images_edits.success",
+		Method:   "POST",
+		URL:      url,
+		Meta:     map[string]any{"assets": len(assets), "latency_ms": time.Since(start).Milliseconds()},
+	})
+	return &provider.Result{TaskID: req.TaskID, Assets: assets, Latency: time.Since(start)}, nil
+}
+
+func (p *Provider) generateImage2Pic2APIChat(ctx context.Context, req *provider.Request) (*provider.Result, error) {
+	base := strings.TrimRight(req.BaseURL, "/")
+	if base == "" {
+		base = p.defaultURL
+	}
+	url := chatCompletionEndpoint(base)
+	count := req.Count
+	if count <= 0 {
+		count = 1
+	}
+	size := imagesAPIRequestSize(req)
+	quality := imagesAPIQuality(req.Params)
+	refs := cleanReferenceImages(req.RefAssets)
+	if len(refs) == 0 {
+		return p.generateImage2ImagesAPI(ctx, req)
+	}
+	client, err := p.httpClient(req.ProxyURL)
+	if err != nil {
+		return nil, err
+	}
+	content := make([]map[string]any, 0, 1+len(refs))
+	content = append(content, map[string]any{"type": "text", "text": req.Prompt})
+	for i, ref := range refs {
+		raw, mime, err := readRefImage(ctx, client, ref)
+		if err != nil {
+			return nil, fmt.Errorf("gpt image2 pic2api reference %d: %w", i+1, err)
+		}
+		if mime == "" || !strings.HasPrefix(mime, "image/") {
+			mime = "image/png"
+		}
+		content = append(content, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]string{
+				"url": "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(raw),
+			},
+		})
+	}
+	body := map[string]any{
+		"model":  imageToolModel(req.ModelCode),
+		"stream": true,
+		"n":      count,
+		"size":   size,
+		"messages": []map[string]any{{
+			"role":    "user",
+			"content": content,
+		}},
+	}
+	if quality != "" {
+		body["quality"] = quality
+	}
+	payload, _ := json.Marshal(body)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+req.Credential)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("User-Agent", "kleinai/1.0")
+
+	start := time.Now()
+	logUpstream(ctx, req, provider.UpstreamLogEntry{
+		Provider: "gpt",
+		Stage:    "pic2api_chat.start",
+		Method:   "POST",
+		URL:      url,
+		Meta: map[string]any{
+			"model":     req.ModelCode,
+			"size":      size,
+			"quality":   quality,
+			"count":     count,
+			"ref_count": len(refs),
+		},
+	})
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "pic2api_chat.request", Method: "POST", URL: url, RequestExcerpt: snippet(payload, 600), Error: err.Error()})
+		return nil, fmt.Errorf("gpt image2 pic2api http: %w", err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "pic2api_chat.failed", Method: "POST", URL: url, StatusCode: resp.StatusCode, RequestExcerpt: snippet(payload, 600), ResponseExcerpt: snippet(raw, 600)})
+		return nil, fmt.Errorf("gpt image2 pic2api %d: %s", resp.StatusCode, snippet(raw, 320))
+	}
+	urls, contentText := chatCompletionImageURLs(raw)
+	if len(urls) == 0 {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "pic2api_chat.failed", Method: "POST", URL: url, RequestExcerpt: snippet(payload, 600), ResponseExcerpt: snippet(raw, 600)})
+		if strings.TrimSpace(contentText) != "" {
+			return nil, fmt.Errorf("gpt image2 pic2api returned no image URL: %s", snippet([]byte(contentText), 320))
+		}
+		return nil, fmt.Errorf("gpt image2 pic2api returned 0 image")
+	}
+	width, height := parseSize(size)
+	assets := make([]provider.Asset, 0, len(urls))
+	for _, rawURL := range urls {
+		assets = append(assets, provider.Asset{URL: rawURL, Width: width, Height: height, Mime: "image/png", Meta: map[string]any{"provider_route": "pic2api_chat", "size": size}})
+		if len(assets) >= count {
+			break
+		}
+	}
+	logUpstream(ctx, req, provider.UpstreamLogEntry{
+		Provider:        "gpt",
+		Stage:           "pic2api_chat.success",
+		Method:          "POST",
+		URL:             url,
+		ResponseExcerpt: contentText,
+		Meta:            map[string]any{"assets": len(assets), "latency_ms": time.Since(start).Milliseconds()},
+	})
+	return &provider.Result{TaskID: req.TaskID, Assets: assets, Latency: time.Since(start)}, nil
+}
+
+func (p *Provider) generateImage2NovaAsync(ctx context.Context, req *provider.Request) (*provider.Result, error) {
+	base := novaAPIBase(req.BaseURL)
+	createURL := novaGenerateImageEndpoint(base)
+	count := req.Count
+	if count <= 0 {
+		count = 1
+	}
+	size := imageSize(req.Params, "1024x1024")
+	width, height := parseSize(size)
+	if width <= 0 || height <= 0 {
+		width, height = 1024, 1024
+	}
+	body := map[string]any{
+		"model":  strings.TrimSpace(req.ModelCode),
+		"prompt": req.Prompt,
+		"width":  width,
+		"height": height,
+	}
+	if steps := numericParam(req.Params, "steps"); steps != nil {
+		body["steps"] = steps
+	}
+	if seed := numericParam(req.Params, "seed"); seed != nil {
+		body["seed"] = seed
+	}
+	if refs := cleanReferenceImages(req.RefAssets); len(refs) > 0 {
+		ref := strings.TrimSpace(refs[0])
+		if strings.HasPrefix(ref, "/") {
+			return nil, fmt.Errorf("gpt image2 nova requires a public reference image URL; enable OSS result cache for uploaded reference images")
+		}
+		body["image_url"] = ref
+	}
+
+	client, err := p.httpClient(req.ProxyURL)
+	if err != nil {
+		return nil, err
+	}
+	start := time.Now()
+	assets := make([]provider.Asset, 0, count)
+	for attempt := 0; attempt < count && len(assets) < count; attempt++ {
+		payload, _ := json.Marshal(body)
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, createURL, bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+req.Credential)
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", "kleinai/1.0")
+		logUpstream(ctx, req, provider.UpstreamLogEntry{
+			Provider:       "gpt",
+			Stage:          "nova_async.start",
+			Method:         "POST",
+			URL:            createURL,
+			RequestExcerpt: snippet(payload, 600),
+			Meta: map[string]any{
+				"model":     req.ModelCode,
+				"size":      size,
+				"width":     width,
+				"height":    height,
+				"count":     count,
+				"ref_count": len(req.RefAssets),
+			},
+		})
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "nova_async.request", Method: "POST", URL: createURL, RequestExcerpt: snippet(payload, 600), Error: err.Error()})
+			return nil, fmt.Errorf("gpt image2 nova http: %w", err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "nova_async.failed", Method: "POST", URL: createURL, StatusCode: resp.StatusCode, RequestExcerpt: snippet(payload, 600), ResponseExcerpt: snippet(raw, 600)})
+			return nil, fmt.Errorf("gpt image2 nova %d: %s", resp.StatusCode, snippet(raw, 320))
+		}
+		var task novaPredictionResp
+		if err := json.Unmarshal(raw, &task); err != nil {
+			logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "nova_async.decode", Method: "POST", URL: createURL, RequestExcerpt: snippet(payload, 600), ResponseExcerpt: snippet(raw, 600), Error: err.Error()})
+			return nil, fmt.Errorf("gpt image2 nova decode: %w", err)
+		}
+		taskID := firstNonEmpty(task.ID, task.TaskID)
+		logUpstream(ctx, req, provider.UpstreamLogEntry{
+			Provider:        "gpt",
+			Stage:           "nova_async.created",
+			Method:          "POST",
+			URL:             createURL,
+			ResponseExcerpt: snippet(raw, 600),
+			Meta:            map[string]any{"task_id": taskID, "status": task.Status},
+		})
+		if extracted, done, err := novaAssets(task, size); err != nil {
+			return nil, err
+		} else if done && len(extracted) > 0 {
+			assets = append(assets, extracted...)
+			continue
+		}
+		extracted, err := p.pollNovaImageTask(ctx, client, req, base, taskID, size)
+		if err != nil {
+			return nil, err
+		}
+		assets = append(assets, extracted...)
+	}
+	if len(assets) == 0 {
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "nova_async.failed", Method: "POST", URL: createURL, ResponseExcerpt: "gpt image2 nova returned 0 image"})
+		return nil, fmt.Errorf("gpt image2 nova returned 0 image")
+	}
+	if len(assets) > count {
+		assets = assets[:count]
+	}
+	logUpstream(ctx, req, provider.UpstreamLogEntry{
+		Provider: "gpt",
+		Stage:    "nova_async.success",
+		Method:   "POST",
+		URL:      createURL,
 		Meta:     map[string]any{"assets": len(assets), "latency_ms": time.Since(start).Milliseconds()},
 	})
 	return &provider.Result{TaskID: req.TaskID, Assets: assets, Latency: time.Since(start)}, nil
@@ -1032,7 +1432,7 @@ func imagesAPIAssets(task imageGenerationTaskResp, size string) ([]provider.Asse
 		}
 	}
 	if len(items) == 0 {
-		return nil, status == "completed", nil
+		return nil, isTerminalImageSuccessStatus(status), nil
 	}
 	width, height := parseSize(size)
 	assets := make([]provider.Asset, 0, len(items))
@@ -1050,6 +1450,327 @@ func imagesAPIAssets(task imageGenerationTaskResp, size string) ([]provider.Asse
 		}
 	}
 	return assets, true, nil
+}
+
+func isTerminalImageSuccessStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "complete", "success", "succeeded", "done":
+		return true
+	default:
+		return false
+	}
+}
+
+func imagesAPIRequestSize(req *provider.Request) string {
+	if req == nil {
+		return "1024x1024"
+	}
+	size := imageSize(req.Params, "1024x1024")
+	if imageAPIAdapterMode(req) == imageAPIModePic2API {
+		return pic2APIImageSize(req.Params, size)
+	}
+	return size
+}
+
+func pic2APIImageSize(params map[string]any, fallback string) string {
+	if explicit := strParam(params, "size", ""); explicit != "" {
+		return explicit
+	}
+	ratio := strParam(params, "ratio", strParam(params, "aspect_ratio", "1:1"))
+	tier := strings.ToLower(strParam(params, "resolution", strParam(params, "size_tier", "1K")))
+	switch strings.ReplaceAll(tier, " ", "") {
+	case "2k", "hd":
+		tier = "2k"
+	case "4k", "ultra":
+		tier = "4k"
+	default:
+		tier = "1k"
+	}
+	if byRatio := pic2APIStandardSizes[tier]; byRatio != nil {
+		if size := byRatio[ratio]; size != "" {
+			return size
+		}
+		if size := byRatio["1:1"]; size != "" {
+			return size
+		}
+	}
+	return fallback
+}
+
+var pic2APIStandardSizes = map[string]map[string]string{
+	"1k": {
+		"auto": "1024x1024",
+		"1:1":  "1024x1024",
+		"3:2":  "1008x672",
+		"2:3":  "672x1008",
+		"4:3":  "1024x768",
+		"3:4":  "768x1024",
+		"5:4":  "960x768",
+		"4:5":  "768x960",
+		"16:9": "1024x576",
+		"9:16": "576x1024",
+		"21:9": "1008x432",
+	},
+	"2k": {
+		"auto": "2048x2048",
+		"1:1":  "2048x2048",
+		"3:2":  "2016x1344",
+		"2:3":  "1344x2016",
+		"4:3":  "2048x1536",
+		"3:4":  "1536x2048",
+		"5:4":  "2000x1600",
+		"4:5":  "1600x2000",
+		"16:9": "2048x1152",
+		"9:16": "1152x2048",
+		"21:9": "2016x864",
+	},
+	"4k": {
+		"auto": "2880x2880",
+		"1:1":  "2880x2880",
+		"3:2":  "3504x2336",
+		"2:3":  "2336x3504",
+		"4:3":  "3264x2448",
+		"3:4":  "2448x3264",
+		"5:4":  "3200x2560",
+		"4:5":  "2560x3200",
+		"16:9": "3840x2160",
+		"9:16": "2160x3840",
+		"21:9": "3696x1584",
+	},
+}
+
+func imageEditFilename(index int, mime string) string {
+	ext := ".png"
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "image/jpeg", "image/jpg":
+		ext = ".jpg"
+	case "image/webp":
+		ext = ".webp"
+	case "image/gif":
+		ext = ".gif"
+	}
+	return fmt.Sprintf("reference-%d%s", index+1, ext)
+}
+
+func openAIImageResponseAssets(raw []byte, size, route string) ([]provider.Asset, error) {
+	var out imgResp
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("gpt image2 %s decode: %w", route, err)
+	}
+	if out.Error != nil && out.Error.Message != "" {
+		return nil, fmt.Errorf("gpt image2 %s: %s", route, out.Error.Message)
+	}
+	width, height := parseSize(size)
+	assets := make([]provider.Asset, 0, len(out.Data))
+	for _, item := range out.Data {
+		mime := "image/png"
+		assetURL := strings.TrimSpace(item.URL)
+		if assetURL == "" && item.B64JSON != "" {
+			assetURL = "data:" + mime + ";base64," + item.B64JSON
+		}
+		if assetURL != "" {
+			assets = append(assets, provider.Asset{URL: assetURL, Width: width, Height: height, Mime: mime, Meta: map[string]any{"provider_route": route, "size": size}})
+		}
+	}
+	return assets, nil
+}
+
+func chatCompletionImageURLs(raw []byte) ([]string, string) {
+	fullContent := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		fullContent += chatCompletionChunkContent([]byte(data))
+	}
+	if strings.TrimSpace(fullContent) == "" {
+		fullContent = chatCompletionChunkContent(raw)
+	}
+	return extractImageMarkdownURLs(fullContent), fullContent
+}
+
+func chatCompletionChunkContent(raw []byte) string {
+	var parsed struct {
+		Choices []struct {
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			Text string `json:"text"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, choice := range parsed.Choices {
+		b.WriteString(choice.Delta.Content)
+		b.WriteString(choice.Message.Content)
+		b.WriteString(choice.Text)
+	}
+	return b.String()
+}
+
+func novaAPIBase(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return "https://api.nova.ai"
+	}
+	suffixes := []string{
+		"/api/v1/model/generateImage",
+		"/api/v1/model/prediction",
+		"/v1/models",
+		"/v1",
+	}
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(base, suffix) {
+			base = strings.TrimRight(strings.TrimSuffix(base, suffix), "/")
+			break
+		}
+	}
+	if base == "" {
+		return "https://api.nova.ai"
+	}
+	return base
+}
+
+func novaGenerateImageEndpoint(base string) string {
+	return strings.TrimRight(novaAPIBase(base), "/") + "/api/v1/model/generateImage"
+}
+
+func novaPredictionEndpoint(base, taskID string) string {
+	return strings.TrimRight(novaAPIBase(base), "/") + "/api/v1/model/prediction/" + url.PathEscape(strings.TrimSpace(taskID))
+}
+
+func (p *Provider) pollNovaImageTask(ctx context.Context, client *http.Client, req *provider.Request, base, taskID, size string) ([]provider.Asset, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return nil, fmt.Errorf("gpt image2 nova missing prediction id")
+	}
+	pollURL := novaPredictionEndpoint(base, taskID)
+	deadline := time.Now().Add(novaDefaultPollMaxWindow)
+	poll := 0
+	for time.Now().Before(deadline) {
+		poll++
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(novaDefaultPollInterval):
+		}
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+req.Credential)
+		httpReq.Header.Set("User-Agent", "kleinai/1.0")
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "nova_async.poll", Method: "GET", URL: pollURL, Error: err.Error(), Meta: map[string]any{"poll": poll}})
+			return nil, fmt.Errorf("gpt image2 nova poll: %w", err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "nova_async.poll_failed", Method: "GET", URL: pollURL, StatusCode: resp.StatusCode, ResponseExcerpt: snippet(raw, 600), Meta: map[string]any{"poll": poll}})
+			return nil, fmt.Errorf("gpt image2 nova poll %d: %s", resp.StatusCode, snippet(raw, 320))
+		}
+		var task novaPredictionResp
+		if err := json.Unmarshal(raw, &task); err != nil {
+			logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "nova_async.poll_decode", Method: "GET", URL: pollURL, ResponseExcerpt: snippet(raw, 600), Error: err.Error(), Meta: map[string]any{"poll": poll}})
+			return nil, fmt.Errorf("gpt image2 nova poll decode: %w", err)
+		}
+		logUpstream(ctx, req, provider.UpstreamLogEntry{Provider: "gpt", Stage: "nova_async.poll", Method: "GET", URL: pollURL, ResponseExcerpt: snippet(raw, 600), Meta: map[string]any{"poll": poll, "status": task.Status}})
+		assets, done, err := novaAssets(task, size)
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			return assets, nil
+		}
+	}
+	return nil, fmt.Errorf("gpt image2 nova task timeout")
+}
+
+func novaAssets(task novaPredictionResp, size string) ([]provider.Asset, bool, error) {
+	status := strings.ToLower(strings.TrimSpace(task.Status))
+	if task.Error != nil && task.Error.Message != "" {
+		return nil, true, fmt.Errorf("gpt image2 nova: %s", task.Error.Message)
+	}
+	if task.Message != "" && (status == "failed" || status == "error") {
+		return nil, true, fmt.Errorf("gpt image2 nova: %s", task.Message)
+	}
+	switch status {
+	case "failed", "error", "cancelled", "canceled":
+		return nil, true, fmt.Errorf("gpt image2 nova task failed")
+	}
+	items := make([]struct {
+		URL     string
+		B64JSON string
+	}, 0)
+	if task.URL != "" {
+		items = append(items, struct {
+			URL     string
+			B64JSON string
+		}{URL: task.URL})
+	}
+	for _, d := range task.Data {
+		items = append(items, struct {
+			URL     string
+			B64JSON string
+		}{URL: d.URL, B64JSON: d.B64JSON})
+	}
+	for _, result := range task.Results {
+		for _, data := range result.Data {
+			for _, output := range data.Outputs {
+				items = append(items, struct {
+					URL     string
+					B64JSON string
+				}{URL: output.URL, B64JSON: output.B64JSON})
+			}
+		}
+	}
+	if len(items) == 0 {
+		return nil, isTerminalImageSuccessStatus(status), nil
+	}
+	width, height := parseSize(size)
+	assets := make([]provider.Asset, 0, len(items))
+	for _, item := range items {
+		assetURL := strings.TrimSpace(item.URL)
+		if assetURL == "" && item.B64JSON != "" {
+			assetURL = "data:image/png;base64," + item.B64JSON
+		}
+		if assetURL != "" {
+			assets = append(assets, provider.Asset{URL: assetURL, Width: width, Height: height, Mime: "image/png", Meta: map[string]any{"provider_route": "nova_async", "size": size}})
+		}
+	}
+	return assets, true, nil
+}
+
+func numericParam(params map[string]any, key string) any {
+	if params == nil {
+		return nil
+	}
+	switch v := params[key].(type) {
+	case int:
+		return v
+	case int64:
+		return v
+	case float64:
+		return v
+	case json.Number:
+		return v
+	case string:
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return nil
 }
 
 var markdownImageURLRe = regexp.MustCompile(`(?i)!?\[[^\]]*\]\((https?://[^)\s]+)\)|https?://[^\s<>"')]+`)
@@ -1762,6 +2483,83 @@ func shouldUseWebImage2(req *provider.Request) bool {
 	return tier == "1K" || tier == "1"
 }
 
+func imageAPIAdapterMode(req *provider.Request) string {
+	if req == nil {
+		return imageAPIModeAuto
+	}
+	if mode := normalizeImageAPIMode(firstStringParam(req.Params, imageAPIModeParam, routeImageAPIModeParam)); mode != "" {
+		return mode
+	}
+	if req.Account != nil && req.Account.AuthType == model.AuthTypeAPIKey {
+		if looksLikeNovaRoute(req) {
+			return imageAPIModeNovaAsync
+		}
+		if looksLikePic2APIRoute(req) {
+			return imageAPIModePic2API
+		}
+		return imageAPIModeImages
+	}
+	return imageAPIModeAuto
+}
+
+func normalizeImageAPIMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "auto":
+		return ""
+	case "openai_responses", "responses", "response":
+		return imageAPIModeResponses
+	case "openai_images", "images", "image", "newapi", "galaxy", "yinhe":
+		return imageAPIModeImages
+	case "pic2api", "chat_completions", "chat-completions":
+		return imageAPIModePic2API
+	case "nova", "nova_async", "nova-async":
+		return imageAPIModeNovaAsync
+	default:
+		return ""
+	}
+}
+
+func looksLikeNovaRoute(req *provider.Request) bool {
+	return routeNeedleContains(req, "api.nova.ai", "nova", "novahub", "fdq.ai", "freedomstore")
+}
+
+func looksLikePic2APIRoute(req *provider.Request) bool {
+	return routeNeedleContains(req, "pic2api")
+}
+
+func routeNeedleContains(req *provider.Request, values ...string) bool {
+	if req == nil {
+		return false
+	}
+	parts := []string{req.BaseURL, req.ModelCode}
+	if req.Account != nil {
+		parts = append(parts, req.Account.Name)
+		if req.Account.BaseURL != nil {
+			parts = append(parts, *req.Account.BaseURL)
+		}
+		if req.Account.Remark != nil {
+			parts = append(parts, *req.Account.Remark)
+		}
+	}
+	needle := strings.ToLower(strings.Join(parts, " "))
+	for _, value := range values {
+		if strings.Contains(needle, strings.ToLower(value)) {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanReferenceImages(refs []string) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if ref = strings.TrimSpace(ref); ref != "" {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
 func isGPTImage2(model string) bool {
 	return imageToolModel(model) == "gpt-image-2"
 }
@@ -1813,10 +2611,12 @@ func normalizeOpenAICompatibleBase(base string) string {
 	endpointSuffixes := []string{
 		"/v1/models",
 		"/v1/images/generations",
+		"/v1/images/edits",
 		"/v1/chat/completions",
 		"/v1/responses",
 		"/models",
 		"/images/generations",
+		"/images/edits",
 		"/chat/completions",
 		"/responses",
 	}

@@ -13,6 +13,13 @@ import (
 
 const SettingProviderRoutes = "provider.routes"
 
+const (
+	ProviderRouteImageAPIModeOpenAIResponses = "openai_responses"
+	ProviderRouteImageAPIModeOpenAIImages    = "openai_images"
+	ProviderRouteImageAPIModePic2API         = "pic2api"
+	ProviderRouteImageAPIModeNovaAsync       = "nova_async"
+)
+
 // ProviderRouteRule describes how a public model should be sent to upstream
 // account pools. It is stored in system_config as JSON under provider.routes.
 type ProviderRouteRule struct {
@@ -27,6 +34,7 @@ type ProviderRouteOption struct {
 	Provider      string `json:"provider"`
 	UpstreamModel string `json:"upstream_model,omitempty"`
 	AuthType      string `json:"auth_type,omitempty"`
+	ImageAPIMode  string `json:"image_api_mode,omitempty"`
 	Strategy      string `json:"strategy,omitempty"`
 	Weight        int    `json:"weight,omitempty"`
 	Priority      int    `json:"priority,omitempty"`
@@ -37,6 +45,7 @@ type ProviderRoute struct {
 	Provider      string `json:"provider"`
 	UpstreamModel string `json:"upstream_model"`
 	AuthType      string `json:"auth_type,omitempty"`
+	ImageAPIMode  string `json:"image_api_mode,omitempty"`
 	Strategy      string `json:"strategy"`
 }
 
@@ -118,6 +127,9 @@ func (s *ProviderRouteService) ResolveCandidates(ctx context.Context, kind provi
 		if option.AuthType != "" {
 			candidate.AuthType = strings.TrimSpace(option.AuthType)
 		}
+		if option.ImageAPIMode != "" {
+			candidate.ImageAPIMode = normalizeProviderRouteImageAPIMode(option.ImageAPIMode)
+		}
 		if option.Strategy != "" {
 			candidate.Strategy = normalizeRouteStrategy(option.Strategy)
 		}
@@ -137,6 +149,7 @@ func (r ProviderRoute) withDefaults(modelCode string) ProviderRoute {
 		r.Strategy = "round_robin"
 	}
 	r.Strategy = normalizeRouteStrategy(r.Strategy)
+	r.ImageAPIMode = normalizeProviderRouteImageAPIMode(r.ImageAPIMode)
 	if strings.TrimSpace(r.UpstreamModel) == "" {
 		r.UpstreamModel = strings.TrimSpace(modelCode)
 	}
@@ -233,6 +246,7 @@ func appendProviderRouteCandidate(routes []ProviderRoute, route ProviderRoute) [
 		if strings.EqualFold(existing.Provider, route.Provider) &&
 			strings.EqualFold(existing.UpstreamModel, route.UpstreamModel) &&
 			strings.EqualFold(existing.AuthType, route.AuthType) &&
+			strings.EqualFold(existing.ImageAPIMode, route.ImageAPIMode) &&
 			strings.EqualFold(existing.Strategy, route.Strategy) {
 			return routes
 		}
@@ -336,6 +350,10 @@ func normalizeProviderRouteOptionForConfig(option ProviderRouteOption, ruleIndex
 	if authType != "" && authType != model.AuthTypeAPIKey && authType != model.AuthTypeCookie && authType != model.AuthTypeOAuth {
 		return ProviderRouteOption{}, fmt.Errorf("provider.routes 第 %d 条规则第 %d 条认证类型只能是 api_key/cookie/oauth 或留空", ruleIndex+1, optionIndex+1)
 	}
+	imageAPIMode, err := normalizeProviderRouteImageAPIModeForConfig(option.ImageAPIMode)
+	if err != nil {
+		return ProviderRouteOption{}, fmt.Errorf("provider.routes 第 %d 条规则第 %d 条图片调用模式%s", ruleIndex+1, optionIndex+1, err.Error())
+	}
 	strategy := ""
 	if strings.TrimSpace(option.Strategy) != "" {
 		normalized, err := normalizeRouteStrategyForConfig(option.Strategy)
@@ -365,6 +383,7 @@ func normalizeProviderRouteOptionForConfig(option ProviderRouteOption, ruleIndex
 		Provider:      providerName,
 		UpstreamModel: strings.TrimSpace(option.UpstreamModel),
 		AuthType:      authType,
+		ImageAPIMode:  imageAPIMode,
 		Strategy:      strategy,
 		Weight:        weight,
 		Priority:      option.Priority,
@@ -378,6 +397,28 @@ func validProviderRouteKind(kind string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func normalizeProviderRouteImageAPIMode(v string) string {
+	mode, _ := normalizeProviderRouteImageAPIModeForConfig(v)
+	return mode
+}
+
+func normalizeProviderRouteImageAPIModeForConfig(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "auto":
+		return "", nil
+	case "openai_responses", "responses", "response":
+		return ProviderRouteImageAPIModeOpenAIResponses, nil
+	case "openai_images", "images", "image", "newapi", "galaxy", "yinhe":
+		return ProviderRouteImageAPIModeOpenAIImages, nil
+	case "pic2api", "chat_completions", "chat-completions":
+		return ProviderRouteImageAPIModePic2API, nil
+	case "nova", "nova_async", "nova-async":
+		return ProviderRouteImageAPIModeNovaAsync, nil
+	default:
+		return "", fmt.Errorf("只能是 auto/openai_responses/openai_images/pic2api/nova_async 或留空")
 	}
 }
 

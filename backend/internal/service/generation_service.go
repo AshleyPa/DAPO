@@ -40,7 +40,10 @@ const (
 	routeParamUpstreamModel = "_provider_route_upstream_model"
 	routeParamStrategy      = "_provider_route_strategy"
 	routeParamAuthType      = "_provider_route_auth_type"
+	routeParamImageAPIMode  = "_provider_route_image_api_mode"
 	routeParamCandidates    = "_provider_route_candidates"
+
+	providerParamImageAPIMode = "image_api_mode"
 )
 
 // GenerationService 生成调度服务。
@@ -239,6 +242,7 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 		if err := s.repo.SetRunning(ctx, t.TaskID, acc.ID); err != nil {
 			log.Warn("set running failed", zap.Error(err))
 		}
+		provParams := paramsForProviderRoute(params, route)
 
 		provReq := &provider.Request{
 			TaskID:    t.TaskID,
@@ -246,7 +250,7 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 			Mode:      provider.Mode(t.Mode),
 			ModelCode: route.UpstreamModel,
 			Prompt:    t.Prompt,
-			Params:    params,
+			Params:    provParams,
 			RefAssets: refs,
 			Count:     t.Count,
 			Account:   acc,
@@ -465,6 +469,11 @@ func (s *GenerationService) pickAccountForRoute(ctx context.Context, t *model.Ge
 			return predicate(acc) && isCodexOAuthAccount(acc)
 		})
 	}
+	if route.AuthType == "" && routePrefersAPIKeyImageMode(route.ImageAPIMode) {
+		return s.pool.ReserveWhere(ctx, route.Provider, route.Strategy, func(acc *model.Account) bool {
+			return predicate(acc) && acc != nil && acc.AuthType == model.AuthTypeAPIKey
+		})
+	}
 	if route.AuthType == "" {
 		return s.pool.ReserveWhere(ctx, route.Provider, route.Strategy, func(acc *model.Account) bool {
 			return predicate(acc) && acc != nil && acc.AuthType == model.AuthTypeOAuth
@@ -476,6 +485,15 @@ func (s *GenerationService) pickAccountForRoute(ctx context.Context, t *model.Ge
 		}
 		return predicate(acc)
 	})
+}
+
+func routePrefersAPIKeyImageMode(mode string) bool {
+	switch normalizeProviderRouteImageAPIMode(mode) {
+	case ProviderRouteImageAPIModeOpenAIImages, ProviderRouteImageAPIModePic2API, ProviderRouteImageAPIModeNovaAsync:
+		return true
+	default:
+		return false
+	}
 }
 
 func accountRequiresCodexRoute(t *model.GenerationTask, params map[string]any) bool {
@@ -491,6 +509,9 @@ func accountRequiresCodexRouteForRoute(t *model.GenerationTask, route ProviderRo
 		route.Provider = t.Provider
 	}
 	if route.Provider != model.ProviderGPT {
+		return false
+	}
+	if mode := normalizeProviderRouteImageAPIMode(route.ImageAPIMode); mode != "" && mode != ProviderRouteImageAPIModeOpenAIResponses {
 		return false
 	}
 	return !shouldUseGPTWebRoute(params)
@@ -532,6 +553,10 @@ func (s *GenerationService) applyProviderRoute(ctx context.Context, kind provide
 	if route.AuthType != "" {
 		params[routeParamAuthType] = route.AuthType
 	}
+	if route.ImageAPIMode != "" {
+		params[routeParamImageAPIMode] = route.ImageAPIMode
+		params[providerParamImageAPIMode] = route.ImageAPIMode
+	}
 	params[routeParamCandidates] = routes
 	return params
 }
@@ -542,6 +567,7 @@ func providerRouteFromParams(params map[string]any, fallbackProvider, modelCode 
 		UpstreamModel: routeParamString(params, routeParamUpstreamModel, modelCode),
 		Strategy:      normalizeRouteStrategy(routeParamString(params, routeParamStrategy, "round_robin")),
 		AuthType:      routeParamString(params, routeParamAuthType, ""),
+		ImageAPIMode:  normalizeProviderRouteImageAPIMode(routeParamString(params, routeParamImageAPIMode, routeParamString(params, providerParamImageAPIMode, ""))),
 	}
 }
 
@@ -576,6 +602,7 @@ func decodeProviderRouteCandidates(raw any, modelCode string) []ProviderRoute {
 					Provider:      x["provider"],
 					UpstreamModel: x["upstream_model"],
 					AuthType:      x["auth_type"],
+					ImageAPIMode:  x["image_api_mode"],
 					Strategy:      x["strategy"],
 				})
 			}
@@ -596,8 +623,36 @@ func providerRouteFromCandidateMap(m map[string]any) ProviderRoute {
 		Provider:      strFromMap(m, "provider"),
 		UpstreamModel: strFromMap(m, "upstream_model"),
 		AuthType:      strFromMap(m, "auth_type"),
+		ImageAPIMode:  strFromMap(m, "image_api_mode"),
 		Strategy:      strFromMap(m, "strategy"),
 	}
+}
+
+func paramsForProviderRoute(params map[string]any, route ProviderRoute) map[string]any {
+	out := make(map[string]any, len(params)+6)
+	for k, v := range params {
+		out[k] = v
+	}
+	if route.Provider != "" {
+		out[routeParamProvider] = route.Provider
+	}
+	if route.UpstreamModel != "" {
+		out[routeParamUpstreamModel] = route.UpstreamModel
+	}
+	if route.Strategy != "" {
+		out[routeParamStrategy] = route.Strategy
+	}
+	if route.AuthType != "" {
+		out[routeParamAuthType] = route.AuthType
+	}
+	if route.ImageAPIMode != "" {
+		out[routeParamImageAPIMode] = route.ImageAPIMode
+		out[providerParamImageAPIMode] = route.ImageAPIMode
+	} else {
+		delete(out, routeParamImageAPIMode)
+		delete(out, providerParamImageAPIMode)
+	}
+	return out
 }
 
 func strFromMap(m map[string]any, key string) string {

@@ -668,6 +668,7 @@ function ProviderRouteDryRunPanel({
           <RouteResultStat label="命中账号池" value={result.provider || '-'} />
           <RouteResultStat label="上游模型" value={result.upstream_model || '-'} />
           <RouteResultStat label="策略 / 认证" value={`${result.strategy || '-'}${result.auth_type ? ` / ${result.auth_type}` : ''}`} />
+          <RouteResultStat label="图片调用" value={result.image_api_mode || '自动'} />
           <RouteResultStat label="可用账号" value={`${result.available_accounts}/${result.candidate_accounts}`} />
           <div className="md:col-span-2 xl:col-span-4 rounded-md border border-border bg-surface p-3 text-small text-text-tertiary">
             {result.matched_config ? (
@@ -682,10 +683,11 @@ function ProviderRouteDryRunPanel({
               <div className="mb-2 text-small font-semibold text-text-primary">候选路线链</div>
               <div className="grid gap-2">
                 {result.candidates.map((route) => (
-                  <div key={`${route.index}-${route.provider}-${route.upstream_model}`} className="grid gap-2 rounded-md border border-border bg-surface-2 p-2 text-small md:grid-cols-[52px_1fr_1fr_1fr]">
+                  <div key={`${route.index}-${route.provider}-${route.upstream_model}`} className="grid gap-2 rounded-md border border-border bg-surface-2 p-2 text-small md:grid-cols-[52px_1fr_1fr_1fr_1fr]">
                     <div className="font-semibold text-text-primary">#{route.index}</div>
                     <div className="text-text-secondary">{route.provider || '-'} / {route.upstream_model || '-'}</div>
                     <div className="text-text-tertiary">{route.strategy || '-'}{route.auth_type ? ` / ${route.auth_type}` : ''}</div>
+                    <div className="text-text-tertiary">{route.image_api_mode || '自动'}</div>
                     <div className={route.warning ? 'text-warning' : 'text-text-secondary'}>
                       可用 {route.available_accounts}/{route.candidate_accounts}{route.warning ? ` · ${route.warning}` : ''}
                     </div>

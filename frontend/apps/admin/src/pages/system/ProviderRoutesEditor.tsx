@@ -2,6 +2,7 @@ import { Plus, Trash2 } from 'lucide-react';
 
 import type {
   ProviderRouteAuthType,
+  ProviderRouteImageAPIMode,
   ProviderRouteKind,
   ProviderRouteOption,
   ProviderRouteRule,
@@ -26,6 +27,14 @@ const AUTH_TYPE_OPTIONS: Array<{ value: ProviderRouteAuthType; label: string }> 
   { value: 'api_key', label: 'API Key' },
   { value: 'cookie', label: 'Cookie' },
   { value: 'oauth', label: 'OAuth' },
+];
+
+const IMAGE_API_MODE_OPTIONS: Array<{ value: ProviderRouteImageAPIMode; label: string }> = [
+  { value: '', label: '自动' },
+  { value: 'openai_responses', label: 'OpenAI Responses' },
+  { value: 'openai_images', label: 'OpenAI / 银河 Images' },
+  { value: 'pic2api', label: 'Pic2API 修图' },
+  { value: 'nova_async', label: 'Nova 异步' },
 ];
 
 const PROVIDER_OPTIONS = [
@@ -211,12 +220,13 @@ export default function ProviderRoutesEditor({
             </div>
 
             <div className="mt-3 overflow-x-auto rounded-md border border-border">
-              <table className="data-table min-w-[860px] text-small">
+              <table className="data-table min-w-[1040px] text-small">
                 <thead>
                   <tr>
                     <th>上游账号池</th>
                     <th>上游模型</th>
                     <th>认证类型</th>
+                    <th>图片调用</th>
                     <th>优先级</th>
                     <th>权重</th>
                     <th>状态</th>
@@ -226,7 +236,7 @@ export default function ProviderRoutesEditor({
                 <tbody>
                   {rule.routes.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="text-center text-text-tertiary">此规则还没有上游路线。</td>
+                      <td colSpan={8} className="text-center text-text-tertiary">此规则还没有上游路线。</td>
                     </tr>
                   ) : (
                     rule.routes.map((route, routeIndex) => (
@@ -255,6 +265,16 @@ export default function ProviderRoutesEditor({
                             onChange={(e) => updateRoute(ruleIndex, routeIndex, { auth_type: e.target.value as ProviderRouteAuthType })}
                           >
                             {AUTH_TYPE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                          </select>
+                        </td>
+                        <td>
+                          <select
+                            className="select"
+                            value={route.image_api_mode || ''}
+                            onChange={(e) => updateRoute(ruleIndex, routeIndex, { image_api_mode: e.target.value as ProviderRouteImageAPIMode })}
+                            title="仅图片模型生效。Nova 选 Nova 异步；银河/New API 选 OpenAI / 银河 Images；Pic2API 参考图选 Pic2API 修图。"
+                          >
+                            {IMAGE_API_MODE_OPTIONS.map((item) => <option key={item.value || 'auto'} value={item.value}>{item.label}</option>)}
                           </select>
                         </td>
                         <td>
@@ -359,10 +379,12 @@ function normalizeRouteOptions(
       throw new Error(`第 ${ruleIndex + 1} 条规则第 ${routeIndex + 1} 条权重必须大于 0`);
     }
     const authType = normalizeAuthType(route.auth_type, `第 ${ruleIndex + 1} 条规则第 ${routeIndex + 1} 条认证类型`);
+    const imageAPIMode = normalizeImageAPIMode(route.image_api_mode, `第 ${ruleIndex + 1} 条规则第 ${routeIndex + 1} 条图片调用模式`);
     return {
       provider,
       upstream_model: (route.upstream_model || '').trim(),
       auth_type: authType,
+      image_api_mode: imageAPIMode,
       priority,
       weight,
       enabled: route.enabled ?? DEFAULT_ENABLED,
@@ -391,6 +413,27 @@ function normalizeAuthType(value: unknown, label: string): ProviderRouteAuthType
   const authType = String(value || '').trim().toLowerCase();
   if (AUTH_TYPE_OPTIONS.some((item) => item.value === authType)) return authType as ProviderRouteAuthType;
   throw new Error(`${label} 只能是 api_key/cookie/oauth 或留空`);
+}
+
+function normalizeImageAPIMode(value: unknown, label: string): ProviderRouteImageAPIMode {
+  const mode = String(value || '').trim().toLowerCase();
+  const aliases: Record<string, ProviderRouteImageAPIMode> = {
+    auto: '',
+    responses: 'openai_responses',
+    response: 'openai_responses',
+    images: 'openai_images',
+    image: 'openai_images',
+    newapi: 'openai_images',
+    galaxy: 'openai_images',
+    yinhe: 'openai_images',
+    chat_completions: 'pic2api',
+    'chat-completions': 'pic2api',
+    nova: 'nova_async',
+    'nova-async': 'nova_async',
+  };
+  const normalized = aliases[mode] ?? mode;
+  if (IMAGE_API_MODE_OPTIONS.some((item) => item.value === normalized)) return normalized as ProviderRouteImageAPIMode;
+  throw new Error(`${label} 只能是 auto/openai_responses/openai_images/pic2api/nova_async 或留空`);
 }
 
 function normalizeInteger(value: unknown, min: number, max: number, label: string) {

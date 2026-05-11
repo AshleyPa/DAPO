@@ -1,6 +1,30 @@
 package gpt
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/kleinai/backend/internal/model"
+	"github.com/kleinai/backend/internal/provider"
+)
+
+type providerRequestForTest struct {
+	BaseURL string
+	Name    string
+}
+
+func (r providerRequestForTest) toProviderRequest() *provider.Request {
+	base := r.BaseURL
+	return &provider.Request{
+		ModelCode: "gpt-image-2",
+		BaseURL:   base,
+		Account: &model.Account{
+			Name:     r.Name,
+			AuthType: model.AuthTypeAPIKey,
+			BaseURL:  &base,
+		},
+		Params: map[string]any{},
+	}
+}
 
 func TestImagesAPIAssetsExtractsMarkdownImageChoice(t *testing.T) {
 	resp := imageGenerationTaskResp{
@@ -62,6 +86,26 @@ func TestImageSizeUsesPic2APIStandardDimensions(t *testing.T) {
 	}
 }
 
+func TestPic2APIImageSizeUsesV1CompatibleDimensions(t *testing.T) {
+	cases := []struct {
+		name string
+		p    map[string]any
+		want string
+	}{
+		{name: "1k wide", p: map[string]any{"ratio": "16:9", "resolution": "1K"}, want: "1024x576"},
+		{name: "2k portrait", p: map[string]any{"ratio": "9:16", "resolution": "2K"}, want: "1152x2048"},
+		{name: "4k square", p: map[string]any{"ratio": "1:1", "resolution": "4K"}, want: "2880x2880"},
+		{name: "explicit size wins", p: map[string]any{"size": "2560x1440", "ratio": "9:16", "resolution": "1K"}, want: "2560x1440"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pic2APIImageSize(tc.p, "1024x1024"); got != tc.want {
+				t.Fatalf("pic2APIImageSize() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestImageGenerationEndpointAvoidsDuplicateV1(t *testing.T) {
 	cases := []struct {
 		base string
@@ -101,6 +145,30 @@ func TestResponseEndpointAvoidsDuplicateV1(t *testing.T) {
 				t.Fatalf("responseEndpoint() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestImageAPIAdapterModeInfersAPIKeyProviders(t *testing.T) {
+	req := &providerRequestForTest{
+		BaseURL: "https://api.nova.ai/v1",
+		Name:    "nova",
+	}
+	if got := imageAPIAdapterMode(req.toProviderRequest()); got != imageAPIModeNovaAsync {
+		t.Fatalf("nova mode = %q, want %q", got, imageAPIModeNovaAsync)
+	}
+	req = &providerRequestForTest{
+		BaseURL: "https://api.pic2api.com/v1",
+		Name:    "Pic2API",
+	}
+	if got := imageAPIAdapterMode(req.toProviderRequest()); got != imageAPIModePic2API {
+		t.Fatalf("pic2api mode = %q, want %q", got, imageAPIModePic2API)
+	}
+	req = &providerRequestForTest{
+		BaseURL: "https://newapi.example.com/v1",
+		Name:    "galaxy",
+	}
+	if got := imageAPIAdapterMode(req.toProviderRequest()); got != imageAPIModeImages {
+		t.Fatalf("newapi mode = %q, want %q", got, imageAPIModeImages)
 	}
 }
 

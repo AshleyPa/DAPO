@@ -109,6 +109,36 @@ func TestNormalizeProviderRouteRulesConfigNormalizes(t *testing.T) {
 	}
 }
 
+func TestNormalizeProviderRouteRulesConfigNormalizesImageAPIMode(t *testing.T) {
+	got, err := NormalizeProviderRouteRulesConfig([]ProviderRouteRule{{
+		Kind:      "image",
+		ModelCode: "gpt-image-2",
+		Routes: []ProviderRouteOption{{
+			Provider:     "gpt",
+			AuthType:     "api_key",
+			ImageAPIMode: "nova",
+			Weight:       1,
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got[0].Routes[0].ImageAPIMode != ProviderRouteImageAPIModeNovaAsync {
+		t.Fatalf("image api mode = %q, want %q", got[0].Routes[0].ImageAPIMode, ProviderRouteImageAPIModeNovaAsync)
+	}
+}
+
+func TestNormalizeProviderRouteRulesConfigRejectsInvalidImageAPIMode(t *testing.T) {
+	_, err := NormalizeProviderRouteRulesConfig([]ProviderRouteRule{{
+		Kind:      "image",
+		ModelCode: "gpt-image-2",
+		Routes:    []ProviderRouteOption{{Provider: "gpt", ImageAPIMode: "unknown", Weight: 1}},
+	}})
+	if err == nil {
+		t.Fatalf("expected invalid image api mode to be rejected")
+	}
+}
+
 func TestNormalizeProviderRouteRulesConfigRejectsString(t *testing.T) {
 	if _, err := NormalizeProviderRouteRulesConfig(`[{"kind":"image"}]`); err == nil {
 		t.Fatalf("expected string provider.routes to be rejected")
@@ -166,19 +196,23 @@ func TestProviderRouteResolveCandidatesFallsBackWhenUninitialized(t *testing.T) 
 
 func TestDecodeProviderRouteCandidates(t *testing.T) {
 	raw := []any{
-		map[string]any{"provider": "gpt", "upstream_model": "gpt-image-2", "strategy": "weighted_rr"},
-		map[string]any{"provider": "gpt", "upstream_model": "gpt-image-2", "strategy": "weighted_rr"},
+		map[string]any{"provider": "gpt", "upstream_model": "gpt-image-2", "strategy": "weighted_rr", "image_api_mode": "nova_async"},
+		map[string]any{"provider": "gpt", "upstream_model": "gpt-image-2", "strategy": "weighted_rr", "image_api_mode": "nova_async"},
+		map[string]any{"provider": "gpt", "upstream_model": "gpt-image-2", "strategy": "weighted_rr", "image_api_mode": "openai_images"},
 		map[string]any{"provider": "grok", "auth_type": "cookie"},
 	}
 	got := decodeProviderRouteCandidates(raw, "public-model")
-	if len(got) != 2 {
+	if len(got) != 3 {
 		t.Fatalf("expected duplicate candidates to be removed, got %d", len(got))
 	}
-	if got[0].Provider != "gpt" || got[0].UpstreamModel != "gpt-image-2" || got[0].Strategy != "weighted_rr" {
+	if got[0].Provider != "gpt" || got[0].UpstreamModel != "gpt-image-2" || got[0].Strategy != "weighted_rr" || got[0].ImageAPIMode != ProviderRouteImageAPIModeNovaAsync {
 		t.Fatalf("unexpected first candidate: %#v", got[0])
 	}
-	if got[1].Provider != "grok" || got[1].UpstreamModel != "public-model" || got[1].AuthType != "cookie" {
+	if got[1].Provider != "gpt" || got[1].ImageAPIMode != ProviderRouteImageAPIModeOpenAIImages {
 		t.Fatalf("unexpected second candidate: %#v", got[1])
+	}
+	if got[2].Provider != "grok" || got[2].UpstreamModel != "public-model" || got[2].AuthType != "cookie" {
+		t.Fatalf("unexpected third candidate: %#v", got[2])
 	}
 }
 

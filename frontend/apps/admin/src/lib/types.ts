@@ -697,11 +697,13 @@ export type ProviderRouteKind = 'image' | 'text' | 'video' | 'chat' | '*';
 export type ProviderRouteStrategy = 'round_robin' | 'weighted_rr';
 export type ProviderRouteProvider = 'gpt' | 'grok' | string;
 export type ProviderRouteAuthType = '' | 'api_key' | 'cookie' | 'oauth';
+export type ProviderRouteImageAPIMode = '' | 'openai_responses' | 'openai_images' | 'pic2api' | 'nova_async';
 
 export interface ProviderRouteOption {
   provider: ProviderRouteProvider;
   upstream_model?: string;
   auth_type?: ProviderRouteAuthType;
+  image_api_mode?: ProviderRouteImageAPIMode;
   strategy?: ProviderRouteStrategy;
   weight?: number;
   priority?: number;
@@ -729,6 +731,7 @@ export interface ProviderRouteTestResp {
   provider: string;
   upstream_model: string;
   auth_type?: string;
+  image_api_mode?: string;
   strategy: string;
   matched_config: boolean;
   matched_kind?: string;
@@ -745,6 +748,7 @@ export interface ProviderRouteCandidateResp {
   provider: string;
   upstream_model: string;
   auth_type?: string;
+  image_api_mode?: string;
   strategy: string;
   candidate_accounts: number;
   available_accounts: number;
