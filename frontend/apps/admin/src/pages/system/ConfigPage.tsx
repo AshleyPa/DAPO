@@ -435,7 +435,7 @@ export default function ConfigPage() {
           <Section icon={<Cloud size={18} />} title="OSS 存储" desc="配置图片、视频、快捷提示词封面和用户上传素材的对象存储位置。">
             <Toggle label="启用 OSS 存储" checked={form.oss_enabled} onChange={(v) => set('oss_enabled', v)} />
             <div className="grid gap-3 md:grid-cols-2">
-              <TextField label="服务商" value={form.oss_provider} onChange={(v) => set('oss_provider', v)} placeholder="aliyun / s3 / cos" />
+              <TextField label="服务商" value={form.oss_provider} onChange={(v) => set('oss_provider', v)} placeholder="sealos / s3 / aliyun" />
               <TextField label="Region" value={form.oss_region} onChange={(v) => set('oss_region', v)} />
               <TextField label="Endpoint" value={form.oss_endpoint} onChange={(v) => set('oss_endpoint', v)} />
               <TextField label="Bucket" value={form.oss_bucket} onChange={(v) => set('oss_bucket', v)} />

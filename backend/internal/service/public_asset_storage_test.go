@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -47,5 +48,31 @@ func TestPublicAssetOSSObjectKeyDefaultPrefix(t *testing.T) {
 	got := ossObjectKeyFromConfig(context.Background(), nil, "prompt-gallery/2026/05/11/cover.png", defaultOSSPublicAssetPrefix)
 	if !strings.HasPrefix(got, "uploads/") || !strings.HasSuffix(got, "/cover.png") {
 		t.Fatalf("ossObjectKeyFromConfig() = %q, want uploads prefix and cover filename", got)
+	}
+}
+
+func TestS3CompatibleObjectURLAndAuthorization(t *testing.T) {
+	cfg := testSystemConfig(map[string]string{
+		"oss.public_base_url": "https://static.example.com",
+	})
+	key := "uploads/2026/05/11/cover.png"
+	gotURL := s3ObjectURL("http://object-storage.local", "dapo-public", key)
+	parsed, err := url.Parse(gotURL)
+	if err != nil {
+		t.Fatalf("url.Parse(%q) error = %v", gotURL, err)
+	}
+	if parsed.Path != "/dapo-public/"+key {
+		t.Fatalf("path = %q, want path-style S3 object URL", parsed.Path)
+	}
+	payloadHash := sha256Hex([]byte("cover"))
+	gotAuth := s3AuthorizationHeader(parsed, "test-access-key", "test-secret-key", "us-east-1", "image/png", payloadHash, "20260511T120000Z", "20260511")
+	if !strings.HasPrefix(gotAuth, "AWS4-HMAC-SHA256 Credential=test-access-key/20260511/us-east-1/s3/aws4_request") {
+		t.Fatalf("Authorization = %q, want AWS SigV4 credential scope", gotAuth)
+	}
+	if !strings.Contains(gotAuth, "SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date") {
+		t.Fatalf("Authorization = %q, want signed S3 headers", gotAuth)
+	}
+	if gotPublicURL := ossPublicURL(context.Background(), cfg, key); gotPublicURL != "https://static.example.com/"+key {
+		t.Fatalf("ossPublicURL() = %q, want public asset URL", gotPublicURL)
 	}
 }
