@@ -12,20 +12,23 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/kleinai/backend/internal/dto"
 	"github.com/kleinai/backend/internal/middleware"
 	"github.com/kleinai/backend/internal/service"
 	"github.com/kleinai/backend/pkg/errcode"
+	"github.com/kleinai/backend/pkg/logger"
 	"github.com/kleinai/backend/pkg/response"
 )
 
 type PromptGalleryHandler struct {
 	svc *service.PromptGalleryService
+	cfg *service.SystemConfigService
 }
 
-func NewPromptGalleryHandler(svc *service.PromptGalleryService) *PromptGalleryHandler {
-	return &PromptGalleryHandler{svc: svc}
+func NewPromptGalleryHandler(svc *service.PromptGalleryService, cfg *service.SystemConfigService) *PromptGalleryHandler {
+	return &PromptGalleryHandler{svc: svc, cfg: cfg}
 }
 
 func (h *PromptGalleryHandler) PublicList(c *gin.Context) {
@@ -184,7 +187,16 @@ func (h *PromptGalleryHandler) UploadCover(c *gin.Context) {
 		response.Fail(c, errcode.InvalidParam.WithMsg("封面图片为空"))
 		return
 	}
-	response.OK(c, gin.H{"url": "/api/v1/gen/cached/" + rel})
+	localURL := "/api/v1/gen/cached/" + rel
+	if service.PublicAssetUsesOSS(c.Request.Context(), h.cfg) {
+		if ossURL, err := service.UploadPublicAssetToOSS(c.Request.Context(), h.cfg, dst, rel, mime); err == nil && strings.TrimSpace(ossURL) != "" {
+			response.OK(c, gin.H{"url": ossURL})
+			return
+		} else if err != nil {
+			logger.FromCtx(c.Request.Context()).Warn("prompt_gallery.cover.oss_upload_failed", zap.Error(err))
+		}
+	}
+	response.OK(c, gin.H{"url": localURL})
 }
 
 func coverExt(mime, filename string) string {

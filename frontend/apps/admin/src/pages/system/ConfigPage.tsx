@@ -386,7 +386,7 @@ export default function ConfigPage() {
             <NumberField label="OAuth 提前刷新窗口（小时）" value={form.oauth_refresh_before_hours} min={1} max={48} onChange={(v) => set('oauth_refresh_before_hours', v)} />
             <NumberField label="生成历史保留（天）" value={form.storage_history_retention_days} min={0} onChange={(v) => set('storage_history_retention_days', v)} />
             <NumberField label="生成结果文件保留（天）" value={form.storage_result_retention_days} min={0} onChange={(v) => set('storage_result_retention_days', v)} />
-            <Field label="生成结果缓存位置">
+            <Field label="生成结果与快捷封面缓存位置">
               <select className="select" value={form.storage_result_cache_driver} onChange={(e) => set('storage_result_cache_driver', e.target.value)}>
                 <option value="local">本地缓存</option>
                 <option value="oss">OSS 存储</option>
@@ -432,7 +432,7 @@ export default function ConfigPage() {
             </div>
           </Section>
 
-          <Section icon={<Cloud size={18} />} title="OSS 存储" desc="配置图片、视频和用户上传素材的对象存储位置。">
+          <Section icon={<Cloud size={18} />} title="OSS 存储" desc="配置图片、视频、快捷提示词封面和用户上传素材的对象存储位置。">
             <Toggle label="启用 OSS 存储" checked={form.oss_enabled} onChange={(v) => set('oss_enabled', v)} />
             <div className="grid gap-3 md:grid-cols-2">
               <TextField label="服务商" value={form.oss_provider} onChange={(v) => set('oss_provider', v)} placeholder="aliyun / s3 / cos" />

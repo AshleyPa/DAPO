@@ -5,8 +5,6 @@ package service
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -1174,78 +1172,7 @@ func compactLargeInlineValue(v any) any {
 }
 
 func (s *GenerationService) uploadCachedAssetToOSS(ctx context.Context, filePath, rel, contentType string) (string, error) {
-	if s.cfg == nil {
-		return "", fmt.Errorf("missing system config")
-	}
-	provider := strings.ToLower(strings.TrimSpace(s.cfg.GetString(ctx, "oss.provider", "aliyun")))
-	if provider != "" && provider != "aliyun" && provider != "oss" {
-		return "", fmt.Errorf("unsupported oss provider %s", provider)
-	}
-	endpoint := strings.TrimSpace(s.cfg.GetString(ctx, "oss.endpoint", ""))
-	bucket := strings.TrimSpace(s.cfg.GetString(ctx, "oss.bucket", ""))
-	accessKeyID := strings.TrimSpace(s.cfg.GetString(ctx, "oss.access_key_id", ""))
-	accessKeySecret := strings.TrimSpace(s.cfg.GetString(ctx, "oss.access_key_secret", ""))
-	if endpoint == "" || bucket == "" || accessKeyID == "" || accessKeySecret == "" {
-		return "", fmt.Errorf("oss config incomplete")
-	}
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	key := s.ossObjectKey(ctx, rel)
-	f, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-	date := time.Now().UTC().Format(http.TimeFormat)
-	resource := "/" + bucket + "/" + key
-	signing := "PUT\n\n" + contentType + "\n" + date + "\n" + resource
-	mac := hmac.New(sha1.New, []byte(accessKeySecret))
-	_, _ = mac.Write([]byte(signing))
-	signature := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-	putURL := ossObjectURL(endpoint, bucket, key)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, putURL, f)
-	if err != nil {
-		return "", err
-	}
-	req.ContentLength = st.Size()
-	req.Header.Set("Date", date)
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Authorization", "OSS "+accessKeyID+":"+signature)
-	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("oss upload HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	publicBase := strings.TrimRight(strings.TrimSpace(s.cfg.GetString(ctx, "oss.public_base_url", "")), "/")
-	if publicBase != "" {
-		return publicBase + "/" + key, nil
-	}
-	return ossObjectURL(endpoint, bucket, key), nil
-}
-
-func (s *GenerationService) ossObjectKey(ctx context.Context, rel string) string {
-	prefix := "generated/{yyyy}/{mm}/{dd}"
-	if s.cfg != nil {
-		prefix = strings.TrimSpace(s.cfg.GetString(ctx, "oss.path_prefix", prefix))
-	}
-	now := time.Now()
-	prefix = strings.Trim(prefix, "/")
-	prefix = strings.ReplaceAll(prefix, "{yyyy}", now.Format("2006"))
-	prefix = strings.ReplaceAll(prefix, "{mm}", now.Format("01"))
-	prefix = strings.ReplaceAll(prefix, "{dd}", now.Format("02"))
-	if prefix == "" {
-		return path.Base(rel)
-	}
-	return prefix + "/" + path.Base(rel)
+	return UploadCachedAssetToOSS(ctx, s.cfg, filePath, rel, contentType)
 }
 
 func ossObjectURL(endpoint, bucket, key string) string {

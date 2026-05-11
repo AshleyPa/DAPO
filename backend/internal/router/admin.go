@@ -76,7 +76,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	providerRouteH := handler.NewAdminProviderRouteHandler(providerRouteTestSvc)
 	logH := handler.NewAdminLogHandler(generationRepo, accountRepo, deps.AES)
 	dashboardH := handler.NewAdminDashboardHandler(dashboardRepo)
-	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc)
+	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc, sysCfgSvc)
 
 	// auth 公开
 	auth := v1.Group("/auth")

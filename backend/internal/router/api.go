@@ -63,7 +63,7 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 	keyH := handler.NewAPIKeyHandler(keySvc)
 	billH := handler.NewBillingHandler(billingSvc, cdkSvc, rechargeSvc)
 	genH := handler.NewGenerationHandler(genSvc, chatSvc, genRepo, accountRepo, sysCfgSvc, deps.AES)
-	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc)
+	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc, sysCfgSvc)
 
 	v1.GET("/models", genH.Models)
 	v1.GET("/public/human-verification", authH.HumanVerificationConfig)

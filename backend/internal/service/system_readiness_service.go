@@ -223,7 +223,7 @@ func (s *SystemReadinessService) storageChecks(ctx context.Context) []dto.AdminS
 		ossEnabled = s.sys.GetBool(ctx, "oss.enabled", false)
 	}
 	checks := []dto.AdminSystemReadinessCheck{
-		boolCheck("storage", "oss_enabled", "OSS 存储", ossEnabled, "OSS 已启用", "OSS 未启用，生成结果会优先依赖本地缓存/运行环境存储", "system_config", false),
+		boolCheck("storage", "oss_enabled", "OSS 存储", ossEnabled, "OSS 已启用", "OSS 未启用，生成结果和快捷提示词封面会优先依赖本地缓存/运行环境存储", "system_config", false),
 	}
 	if !ossEnabled {
 		return checks
