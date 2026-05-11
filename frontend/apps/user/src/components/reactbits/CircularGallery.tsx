@@ -375,6 +375,7 @@ class GalleryApp {
     this.onResize();
     this.createGeometry();
     this.createMedias(items);
+    this.alignInitialOrder(items.length);
     this.raf = window.requestAnimationFrame(this.boundUpdate);
     this.addEventListeners();
   }
@@ -430,8 +431,18 @@ class GalleryApp {
           this.config.textColor,
           this.config.borderRadius,
           this.config.font,
-        ),
+      ),
     );
+  }
+
+  private alignInitialOrder(sourceLength: number) {
+    const firstMedia = this.medias[0];
+    if (!firstMedia || sourceLength <= 1) return;
+    const leadingSlots = sourceLength >= 3 ? 1 : 0;
+    const offset = firstMedia.width * leadingSlots;
+    this.scroll.current = offset;
+    this.scroll.target = offset;
+    this.scroll.last = offset;
   }
 
   private onTouchDown(e: MouseEvent | TouchEvent) {
