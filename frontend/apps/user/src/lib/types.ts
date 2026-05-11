@@ -180,6 +180,17 @@ export interface PublicModel {
   input_unit_points?: number;
   output_unit_points?: number;
   enabled: boolean;
+  image_price_rules?: ImagePriceRule[];
+}
+
+export interface ImagePriceRule {
+  model_code: string;
+  mode: 't2i' | 'i2i' | string;
+  ratio_group?: 'standard' | 'extended' | string;
+  ratios?: string[];
+  resolution: '1K' | '2K' | '4K' | string;
+  unit_points: number;
+  enabled?: boolean;
 }
 
 export interface PromptGalleryItem {

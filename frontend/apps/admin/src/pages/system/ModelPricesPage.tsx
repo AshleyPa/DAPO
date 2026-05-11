@@ -18,6 +18,16 @@ interface PriceRow {
   enabled: boolean;
 }
 
+interface ImagePriceRuleRow {
+  model_code: string;
+  mode: 't2i' | 'i2i';
+  ratio_group: 'standard' | 'extended';
+  ratios: string[];
+  resolution: '1K' | '2K' | '4K';
+  unit_points: number;
+  enabled: boolean;
+}
+
 const DEFAULT_ROWS: PriceRow[] = [
   { model_code: 'gpt-4o-mini', name: '文字对话', kind: 'text', provider: 'gpt', upstream_model: 'gpt-4o-mini', unit_points: 0, input_unit_points: 1, output_unit_points: 3, enabled: true },
   { model_code: 'gpt-image-2', name: 'GPT Image 2', kind: 'image', provider: 'gpt', upstream_model: 'gpt-image-2', unit_points: 4, enabled: true },
@@ -27,6 +37,24 @@ const DEFAULT_ROWS: PriceRow[] = [
   { model_code: 'img-3d', name: '3D 图片', kind: 'image', provider: 'gpt', upstream_model: 'gpt-image-3d', unit_points: 5, enabled: true },
   { model_code: 'vid-v1', name: '视频生成', kind: 'video', provider: 'grok', upstream_model: 'grok-video', unit_points: 15, enabled: true },
   { model_code: 'vid-i2v', name: '图生视频', kind: 'video', provider: 'grok', upstream_model: 'grok-i2v', unit_points: 20, enabled: true },
+];
+
+const STANDARD_IMAGE_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '5:4', '4:5'];
+const EXTENDED_IMAGE_RATIOS = ['3:2', '2:3', '21:9'];
+
+const DEFAULT_IMAGE_PRICE_RULES: ImagePriceRuleRow[] = [
+  { model_code: 'gpt-image-2', mode: 't2i', ratio_group: 'standard', ratios: STANDARD_IMAGE_RATIOS, resolution: '1K', unit_points: 4, enabled: true },
+  { model_code: 'gpt-image-2', mode: 't2i', ratio_group: 'standard', ratios: STANDARD_IMAGE_RATIOS, resolution: '2K', unit_points: 6, enabled: true },
+  { model_code: 'gpt-image-2', mode: 't2i', ratio_group: 'standard', ratios: STANDARD_IMAGE_RATIOS, resolution: '4K', unit_points: 8, enabled: true },
+  { model_code: 'gpt-image-2', mode: 't2i', ratio_group: 'extended', ratios: EXTENDED_IMAGE_RATIOS, resolution: '1K', unit_points: 5, enabled: true },
+  { model_code: 'gpt-image-2', mode: 't2i', ratio_group: 'extended', ratios: EXTENDED_IMAGE_RATIOS, resolution: '2K', unit_points: 7, enabled: true },
+  { model_code: 'gpt-image-2', mode: 't2i', ratio_group: 'extended', ratios: EXTENDED_IMAGE_RATIOS, resolution: '4K', unit_points: 9, enabled: true },
+  { model_code: 'gpt-image-2', mode: 'i2i', ratio_group: 'standard', ratios: STANDARD_IMAGE_RATIOS, resolution: '1K', unit_points: 6, enabled: true },
+  { model_code: 'gpt-image-2', mode: 'i2i', ratio_group: 'standard', ratios: STANDARD_IMAGE_RATIOS, resolution: '2K', unit_points: 8, enabled: true },
+  { model_code: 'gpt-image-2', mode: 'i2i', ratio_group: 'standard', ratios: STANDARD_IMAGE_RATIOS, resolution: '4K', unit_points: 10, enabled: true },
+  { model_code: 'gpt-image-2', mode: 'i2i', ratio_group: 'extended', ratios: EXTENDED_IMAGE_RATIOS, resolution: '1K', unit_points: 7, enabled: true },
+  { model_code: 'gpt-image-2', mode: 'i2i', ratio_group: 'extended', ratios: EXTENDED_IMAGE_RATIOS, resolution: '2K', unit_points: 9, enabled: true },
+  { model_code: 'gpt-image-2', mode: 'i2i', ratio_group: 'extended', ratios: EXTENDED_IMAGE_RATIOS, resolution: '4K', unit_points: 11, enabled: true },
 ];
 
 function fromValue(v: unknown): PriceRow[] {
@@ -67,21 +95,56 @@ function fromValue(v: unknown): PriceRow[] {
   return DEFAULT_ROWS;
 }
 
+function imageRulesFromValue(v: unknown): ImagePriceRuleRow[] {
+  if (!Array.isArray(v)) return DEFAULT_IMAGE_PRICE_RULES;
+  const rows: ImagePriceRuleRow[] = v.map((r): ImagePriceRuleRow => {
+    const row = r as Partial<ImagePriceRuleRow> & { unit_points?: number };
+    const ratioGroup: ImagePriceRuleRow['ratio_group'] = row.ratio_group === 'extended' ? 'extended' : 'standard';
+    const fallbackRatios = ratioGroup === 'extended' ? EXTENDED_IMAGE_RATIOS : STANDARD_IMAGE_RATIOS;
+    const resolution: ImagePriceRuleRow['resolution'] = row.resolution === '2K' || row.resolution === '4K' ? row.resolution : '1K';
+    const mode: ImagePriceRuleRow['mode'] = row.mode === 'i2i' ? 'i2i' : 't2i';
+    return {
+      model_code: String(row.model_code || 'gpt-image-2'),
+      mode,
+      ratio_group: ratioGroup,
+      ratios: Array.isArray(row.ratios) && row.ratios.length ? row.ratios.map(String) : fallbackRatios,
+      resolution,
+      unit_points: Number(row.unit_points || 0) / 100,
+      enabled: row.enabled !== false,
+    };
+  });
+  return rows.length ? rows : DEFAULT_IMAGE_PRICE_RULES;
+}
+
 export default function ModelPricesPage() {
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: ['admin', 'system', 'settings'], queryFn: () => systemApi.get() });
   const [rows, setRows] = useState<PriceRow[]>(DEFAULT_ROWS);
+  const [imageRules, setImageRules] = useState<ImagePriceRuleRow[]>(DEFAULT_IMAGE_PRICE_RULES);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     if (settings.data) {
       setRows(fromValue(settings.data['billing.model_prices']));
+      setImageRules(imageRulesFromValue(settings.data['billing.image_price_rules']));
       setDirty(false);
     }
   }, [settings.data]);
 
   const update = (idx: number, patch: Partial<PriceRow>) => {
     setRows((old) => old.map((row, i) => (i === idx ? { ...row, ...patch } : row)));
+    setDirty(true);
+  };
+
+  const updateImageRule = (idx: number, patch: Partial<ImagePriceRuleRow>) => {
+    setImageRules((old) => old.map((row, i) => {
+      if (i !== idx) return row;
+      const next = { ...row, ...patch };
+      if (patch.ratio_group && !patch.ratios) {
+        next.ratios = patch.ratio_group === 'extended' ? EXTENDED_IMAGE_RATIOS : STANDARD_IMAGE_RATIOS;
+      }
+      return next;
+    }));
     setDirty(true);
   };
 
@@ -96,6 +159,12 @@ export default function ModelPricesPage() {
         unit_points: Math.round((Number(row.unit_points) || 0) * 100),
         input_unit_points: Math.round((Number(row.input_unit_points) || 0) * 100),
         output_unit_points: Math.round((Number(row.output_unit_points) || 0) * 100),
+      })),
+      'billing.image_price_rules': imageRules.map((row) => ({
+        ...row,
+        model_code: row.model_code.trim(),
+        ratios: row.ratios.map((ratio) => ratio.trim()).filter(Boolean),
+        unit_points: Math.round((Number(row.unit_points) || 0) * 100),
       })),
     }),
     onSuccess: () => {
@@ -177,6 +246,93 @@ export default function ModelPricesPage() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="card space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-h4 font-semibold text-text-primary">图片价格矩阵</h2>
+            <p className="text-small text-text-tertiary mt-1">按生成模式、比例组和分辨率维护单张扣费。前台预估和后端预扣都会读取这里。</p>
+          </div>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => {
+              setImageRules(DEFAULT_IMAGE_PRICE_RULES);
+              setDirty(true);
+            }}
+          >
+            恢复默认梯度
+          </button>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>模型编码</th>
+                <th>模式</th>
+                <th>比例组</th>
+                <th>覆盖比例</th>
+                <th>分辨率</th>
+                <th>单张扣费（点）</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {imageRules.map((row, idx) => (
+                <tr key={`${row.model_code}-${row.mode}-${row.ratio_group}-${row.resolution}-${idx}`}>
+                  <td><input className="input min-w-[140px]" value={row.model_code} onChange={(e) => updateImageRule(idx, { model_code: e.target.value })} /></td>
+                  <td>
+                    <select className="input min-w-[110px]" value={row.mode} onChange={(e) => updateImageRule(idx, { mode: e.target.value as ImagePriceRuleRow['mode'] })}>
+                      <option value="t2i">文生图</option>
+                      <option value="i2i">图生图</option>
+                    </select>
+                  </td>
+                  <td>
+                    <select className="input min-w-[120px]" value={row.ratio_group} onChange={(e) => updateImageRule(idx, { ratio_group: e.target.value as ImagePriceRuleRow['ratio_group'] })}>
+                      <option value="standard">常规比例</option>
+                      <option value="extended">扩展比例</option>
+                    </select>
+                  </td>
+                  <td>
+                    <input
+                      className="input min-w-[250px]"
+                      value={row.ratios.join(', ')}
+                      onChange={(e) => updateImageRule(idx, { ratios: e.target.value.split(',').map((item) => item.trim()).filter(Boolean) })}
+                    />
+                  </td>
+                  <td>
+                    <select className="input min-w-[90px]" value={row.resolution} onChange={(e) => updateImageRule(idx, { resolution: e.target.value as ImagePriceRuleRow['resolution'] })}>
+                      <option value="1K">1K</option>
+                      <option value="2K">2K</option>
+                      <option value="4K">4K</option>
+                    </select>
+                  </td>
+                  <td><input className="input w-[110px]" type="number" min={0} step={0.5} value={row.unit_points} onChange={(e) => updateImageRule(idx, { unit_points: Number(e.target.value) || 0 })} /></td>
+                  <td>
+                    <button className={row.enabled ? 'btn btn-outline btn-sm' : 'btn btn-ghost btn-sm'} onClick={() => updateImageRule(idx, { enabled: !row.enabled })}>
+                      {row.enabled ? '启用' : '停用'}
+                    </button>
+                  </td>
+                  <td>
+                    <button className="btn btn-danger-ghost btn-icon btn-sm" onClick={() => { setImageRules((old) => old.filter((_, i) => i !== idx)); setDirty(true); }}>
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <button
+          className="btn btn-outline btn-md"
+          onClick={() => {
+            setImageRules((old) => [...old, { model_code: 'gpt-image-2', mode: 't2i', ratio_group: 'standard', ratios: STANDARD_IMAGE_RATIOS, resolution: '1K', unit_points: 4, enabled: true }]);
+            setDirty(true);
+          }}
+        >
+          <Plus size={16} /> 添加图片价格规则
+        </button>
       </div>
 
       <button

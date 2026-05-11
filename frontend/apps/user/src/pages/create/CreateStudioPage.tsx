@@ -24,7 +24,7 @@ import { useEnsureLoggedIn } from '../../hooks/useEnsureLoggedIn';
 import { ApiError } from '../../lib/api';
 import { fmtRelative } from '../../lib/format';
 import { genApi, promptGalleryApi } from '../../lib/services';
-import type { GenerationTask, PromptGalleryItem, PublicModel } from '../../lib/types';
+import type { GenerationTask, ImagePriceRule, PromptGalleryItem, PublicModel } from '../../lib/types';
 import { useAuthStore } from '../../stores/auth';
 import { toast } from '../../stores/toast';
 
@@ -48,7 +48,7 @@ const GENERATING_PHRASES = [
 ];
 
 const IMAGE_MODELS = [
-  { code: 'gpt-image-2', label: 'GPT Image 2', cost: 4 },
+  { code: 'gpt-image-2', label: 'GPT Image 2', cost: 4, imagePriceRules: defaultImagePriceRules() },
 ];
 const PRIMARY_IMAGE_MODEL_CODES = new Set(['gpt-image-2']);
 
@@ -58,6 +58,7 @@ type SelectModel = {
   cost?: number;
   input?: number;
   output?: number;
+  imagePriceRules?: ImagePriceRule[];
 };
 
 type RichEffectTuning = {
@@ -376,7 +377,7 @@ export default function CreateStudioPage() {
     ? Math.round(((videoModels.find((m) => m.code === videoModel)?.cost ?? 20) * duration) / 6)
     : mode === 'text'
       ? '按实际 Token'
-      : (imageModels.find((m) => m.code === imageModel)?.cost ?? 4) * count;
+      : estimateImageCost(imageModels.find((m) => m.code === imageModel), imageRatio, imageResolution, attachments.length > 0 ? 'i2i' : 't2i') * count;
   const maxAttachments = mode === 'video' ? VIDEO_MAX_ATTACHMENTS : TEXT_MAX_ATTACHMENTS;
   const activeModels = mode === 'video' ? videoModels : mode === 'text' ? textModels : imageModels;
   const activeModelCode = mode === 'video' ? videoModel : mode === 'text' ? textModel : imageModel;
@@ -1510,6 +1511,7 @@ function imageModelsByCatalog(models: PublicModel[] | undefined): SelectModel[] 
       code: m.model_code,
       label: imageModelLabel(m),
       cost: typeof m.unit_points === 'number' ? m.unit_points / 100 : undefined,
+      imagePriceRules: m.image_price_rules,
     }));
   return rows.length ? rows : IMAGE_MODELS;
 }
@@ -1528,6 +1530,59 @@ function modelsByKind(models: PublicModel[] | undefined, kind: PublicModel['kind
       cost: typeof m.unit_points === 'number' ? m.unit_points / 100 : undefined,
       input: typeof m.input_unit_points === 'number' ? m.input_unit_points / 100 : undefined,
       output: typeof m.output_unit_points === 'number' ? m.output_unit_points / 100 : undefined,
+      imagePriceRules: m.image_price_rules,
     }));
   return rows.length ? rows : fallback;
+}
+
+function estimateImageCost(model: SelectModel | undefined, ratio: string, resolution: string, mode: 't2i' | 'i2i') {
+  const rules = model?.imagePriceRules?.length ? model.imagePriceRules : defaultImagePriceRules(model?.code ?? 'gpt-image-2');
+  const normalizedRatio = normalizeImageRatio(ratio);
+  const normalizedResolution = normalizeImageResolution(resolution);
+  const ratioGroup = imageRatioGroup(normalizedRatio);
+  const matched = rules.find((rule) => {
+    if (rule.enabled === false) return false;
+    if (rule.model_code && model?.code && rule.model_code !== model.code) return false;
+    if (rule.mode !== mode) return false;
+    if (normalizeImageResolution(rule.resolution) !== normalizedResolution) return false;
+    const ratios = rule.ratios ?? [];
+    if (ratios.some((item) => normalizeImageRatio(item) === normalizedRatio)) return true;
+    const group = String(rule.ratio_group || '').trim();
+    return !group || group === '*' || group === 'all' || group === ratioGroup;
+  });
+  if (matched && typeof matched.unit_points === 'number' && matched.unit_points > 0) return matched.unit_points / 100;
+  return model?.cost ?? 4;
+}
+
+function defaultImagePriceRules(modelCode = 'gpt-image-2'): ImagePriceRule[] {
+  const standard = ['1:1', '16:9', '9:16', '4:3', '3:4', '5:4', '4:5'];
+  const extended = ['3:2', '2:3', '21:9'];
+  return [
+    { model_code: modelCode, mode: 't2i', ratio_group: 'standard', ratios: standard, resolution: '1K', unit_points: 400, enabled: true },
+    { model_code: modelCode, mode: 't2i', ratio_group: 'standard', ratios: standard, resolution: '2K', unit_points: 600, enabled: true },
+    { model_code: modelCode, mode: 't2i', ratio_group: 'standard', ratios: standard, resolution: '4K', unit_points: 800, enabled: true },
+    { model_code: modelCode, mode: 't2i', ratio_group: 'extended', ratios: extended, resolution: '1K', unit_points: 500, enabled: true },
+    { model_code: modelCode, mode: 't2i', ratio_group: 'extended', ratios: extended, resolution: '2K', unit_points: 700, enabled: true },
+    { model_code: modelCode, mode: 't2i', ratio_group: 'extended', ratios: extended, resolution: '4K', unit_points: 900, enabled: true },
+    { model_code: modelCode, mode: 'i2i', ratio_group: 'standard', ratios: standard, resolution: '1K', unit_points: 600, enabled: true },
+    { model_code: modelCode, mode: 'i2i', ratio_group: 'standard', ratios: standard, resolution: '2K', unit_points: 800, enabled: true },
+    { model_code: modelCode, mode: 'i2i', ratio_group: 'standard', ratios: standard, resolution: '4K', unit_points: 1000, enabled: true },
+    { model_code: modelCode, mode: 'i2i', ratio_group: 'extended', ratios: extended, resolution: '1K', unit_points: 700, enabled: true },
+    { model_code: modelCode, mode: 'i2i', ratio_group: 'extended', ratios: extended, resolution: '2K', unit_points: 900, enabled: true },
+    { model_code: modelCode, mode: 'i2i', ratio_group: 'extended', ratios: extended, resolution: '4K', unit_points: 1100, enabled: true },
+  ];
+}
+
+function normalizeImageRatio(value: string) {
+  return value.trim().replace('：', ':') || '1:1';
+}
+
+function normalizeImageResolution(value: string) {
+  const normalized = value.trim().toUpperCase();
+  if (normalized === '2K' || normalized === '4K') return normalized;
+  return '1K';
+}
+
+function imageRatioGroup(ratio: string) {
+  return ['3:2', '2:3', '21:9'].includes(ratio) ? 'extended' : 'standard';
 }

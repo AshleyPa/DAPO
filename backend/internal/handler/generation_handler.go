@@ -43,15 +43,26 @@ func NewGenerationHandler(svc *service.GenerationService, chatSvc *service.ChatS
 }
 
 type publicModelResp struct {
-	ModelCode        string `json:"model_code"`
-	Name             string `json:"name"`
-	Kind             string `json:"kind"`
-	Provider         string `json:"provider"`
-	UpstreamModel    string `json:"upstream_model,omitempty"`
-	UnitPoints       int64  `json:"unit_points"`
-	InputUnitPoints  int64  `json:"input_unit_points,omitempty"`
-	OutputUnitPoints int64  `json:"output_unit_points,omitempty"`
-	Enabled          bool   `json:"enabled"`
+	ModelCode        string                     `json:"model_code"`
+	Name             string                     `json:"name"`
+	Kind             string                     `json:"kind"`
+	Provider         string                     `json:"provider"`
+	UpstreamModel    string                     `json:"upstream_model,omitempty"`
+	UnitPoints       int64                      `json:"unit_points"`
+	InputUnitPoints  int64                      `json:"input_unit_points,omitempty"`
+	OutputUnitPoints int64                      `json:"output_unit_points,omitempty"`
+	Enabled          bool                       `json:"enabled"`
+	ImagePriceRules  []publicImagePriceRuleResp `json:"image_price_rules,omitempty"`
+}
+
+type publicImagePriceRuleResp struct {
+	ModelCode  string   `json:"model_code"`
+	Mode       string   `json:"mode"`
+	RatioGroup string   `json:"ratio_group,omitempty"`
+	Ratios     []string `json:"ratios,omitempty"`
+	Resolution string   `json:"resolution"`
+	UnitPoints int64    `json:"unit_points"`
+	Enabled    bool     `json:"enabled"`
 }
 
 // Models GET /api/v1/models
@@ -110,6 +121,7 @@ func (h *GenerationHandler) CreateImage(c *gin.Context) {
 			mode = "t2i"
 		}
 	}
+	params["mode"] = mode
 	count := req.Count
 	if count <= 0 {
 		count = 1
@@ -594,6 +606,7 @@ func (h *GenerationHandler) publicModels(ctx context.Context) []publicModelResp 
 					InputUnitPoints:  row.InputUnitPoints,
 					OutputUnitPoints: row.OutputUnitPoints,
 					Enabled:          true,
+					ImagePriceRules:  h.publicImagePriceRules(ctx, row.ModelCode),
 				})
 			}
 		}
@@ -606,13 +619,33 @@ func (h *GenerationHandler) publicModels(ctx context.Context) []publicModelResp 
 	return rows
 }
 
+func (h *GenerationHandler) publicImagePriceRules(ctx context.Context, modelCode string) []publicImagePriceRuleResp {
+	return publicImagePriceRulesFromRules(service.ImagePriceRulesForModel(ctx, h.cfg, modelCode))
+}
+
+func publicImagePriceRulesFromRules(rules []service.ImagePriceRule) []publicImagePriceRuleResp {
+	out := make([]publicImagePriceRuleResp, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, publicImagePriceRuleResp{
+			ModelCode:  rule.ModelCode,
+			Mode:       rule.Mode,
+			RatioGroup: rule.RatioGroup,
+			Ratios:     append([]string(nil), rule.Ratios...),
+			Resolution: rule.Resolution,
+			UnitPoints: rule.UnitPoints,
+			Enabled:    rule.Enabled == nil || *rule.Enabled,
+		})
+	}
+	return out
+}
+
 func defaultPublicModels() []publicModelResp {
 	return []publicModelResp{
 		{ModelCode: "grok-4.20-fast", Name: "Grok Fast", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-fast", InputUnitPoints: 100, OutputUnitPoints: 300, Enabled: true},
 		{ModelCode: "grok-4.20-auto", Name: "Grok Auto", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-auto", InputUnitPoints: 150, OutputUnitPoints: 450, Enabled: true},
 		{ModelCode: "grok-4.20-expert", Name: "Grok Expert", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-expert", InputUnitPoints: 200, OutputUnitPoints: 600, Enabled: true},
 		{ModelCode: "grok-4.20-heavy", Name: "Grok Heavy", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-heavy", InputUnitPoints: 400, OutputUnitPoints: 1200, Enabled: true},
-		{ModelCode: "gpt-image-2", Name: "GPT Image 2", Kind: "image", Provider: "gpt", UpstreamModel: "gpt-image-2", UnitPoints: 400, Enabled: true},
+		{ModelCode: "gpt-image-2", Name: "GPT Image 2", Kind: "image", Provider: "gpt", UpstreamModel: "gpt-image-2", UnitPoints: 400, Enabled: true, ImagePriceRules: publicImagePriceRulesFromRules(service.DefaultImagePriceRulesForModel("gpt-image-2"))},
 		{ModelCode: "grok-imagine-video", Name: "Grok Imagine 视频", Kind: "video", Provider: "grok", UpstreamModel: "grok-imagine-video", UnitPoints: 2000, Enabled: true},
 	}
 }
