@@ -7,6 +7,7 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  Download,
   FileImage,
   Loader2,
   Maximize2,
@@ -21,7 +22,7 @@ import clsx from 'clsx';
 
 import BorderGlow from '../../components/reactbits/BorderGlow';
 import { useEnsureLoggedIn } from '../../hooks/useEnsureLoggedIn';
-import { ApiError } from '../../lib/api';
+import { ApiError, loadToken } from '../../lib/api';
 import { fmtRelative } from '../../lib/format';
 import { genApi, promptGalleryApi } from '../../lib/services';
 import type { GenerationTask, ImagePriceRule, PromptGalleryItem, PublicModel } from '../../lib/types';
@@ -1324,12 +1325,14 @@ function WorkCard({ item, onOpen }: { item: GenerationTask; onOpen: (preview: { 
   const thumb = result?.thumb_url;
   const original = result?.url;
   const [thumbFailed, setThumbFailed] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [loadedRatio, setLoadedRatio] = useState<string | null>(null);
   const isVideo = item.kind === 'video';
   const showThumb = !!thumb && !thumbFailed;
   const declaredRatio = result?.width && result?.height ? `${result.width} / ${result.height}` : '';
   const mediaRatio = loadedRatio || declaredRatio || (isVideo ? '16 / 9' : '1 / 1');
   const canOpen = item.status === 2 && !!original;
+  const canDownload = canOpen && !downloading;
   const prompt = compactPrompt(item.prompt);
   const setRatioFromImage = (el: HTMLImageElement) => {
     if (el.naturalWidth > 0 && el.naturalHeight > 0) {
@@ -1341,61 +1344,87 @@ function WorkCard({ item, onOpen }: { item: GenerationTask; onOpen: (preview: { 
       setLoadedRatio(`${el.videoWidth} / ${el.videoHeight}`);
     }
   };
+  const handleDownload = async () => {
+    if (!original || downloading) return;
+    setDownloading(true);
+    try {
+      await downloadMedia(original, `${item.kind}-${item.task_id}`);
+      toast.success('下载已开始');
+    } catch {
+      toast.error('下载失败，请稍后重试');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <article className="mb-3 break-inside-avoid overflow-hidden rounded-[8px] border border-[#dfe3e8] bg-white shadow-sm">
-      <button
-        type="button"
-        disabled={!canOpen}
-        onClick={() => original && onOpen({ url: original, type: isVideo ? 'video' : 'image', title: item.model })}
-        style={{ aspectRatio: mediaRatio }}
-        className={clsx(
-          'relative grid w-full place-items-center overflow-hidden bg-[#eef1f5] text-[#667085] transition-[height]',
-          !original && item.status === 1 && 'bg-white',
-          canOpen && 'group cursor-zoom-in',
-        )}
-      >
-        {original ? (
-          isVideo ? (
-            showThumb ? (
-              <img
-                src={thumb}
-                alt=""
-                className="h-full w-full object-cover"
-                loading="lazy"
-                onLoad={(e) => setRatioFromImage(e.currentTarget)}
-                onError={() => setThumbFailed(true)}
-              />
+      <div className="relative">
+        <button
+          type="button"
+          disabled={!canOpen}
+          onClick={() => original && onOpen({ url: original, type: isVideo ? 'video' : 'image', title: item.model })}
+          style={{ aspectRatio: mediaRatio }}
+          className={clsx(
+            'relative grid w-full place-items-center overflow-hidden bg-[#eef1f5] text-[#667085] transition-[height]',
+            !original && item.status === 1 && 'bg-white',
+            canOpen && 'group cursor-zoom-in',
+          )}
+        >
+          {original ? (
+            isVideo ? (
+              showThumb ? (
+                <img
+                  src={thumb}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                  onLoad={(e) => setRatioFromImage(e.currentTarget)}
+                  onError={() => setThumbFailed(true)}
+                />
+              ) : (
+                <video
+                  src={original}
+                  className="h-full w-full object-cover"
+                  muted
+                  playsInline
+                  preload="metadata"
+                  onLoadedMetadata={(e) => setRatioFromVideo(e.currentTarget)}
+                />
+              )
             ) : (
-              <video
-                src={original}
-                className="h-full w-full object-cover"
-                muted
-                playsInline
-                preload="metadata"
-                onLoadedMetadata={(e) => setRatioFromVideo(e.currentTarget)}
-              />
+              <img src={original} alt="" className="h-full w-full object-cover" loading="lazy" onLoad={(e) => setRatioFromImage(e.currentTarget)} />
             )
+          ) : item.status === 1 ? (
+            <GeneratingDots />
           ) : (
-            <img src={original} alt="" className="h-full w-full object-cover" loading="lazy" onLoad={(e) => setRatioFromImage(e.currentTarget)} />
-          )
-        ) : item.status === 1 ? (
-          <GeneratingDots />
-        ) : (
-          <div className="flex flex-col items-center gap-2 text-sm">
-            <FileImage size={24} />
-            <span>{statusText(item.status)}</span>
-          </div>
-        )}
-        <div className="absolute left-2 top-2 rounded-[7px] bg-black/58 px-2 py-0.5 text-[11px] text-white">{item.kind === 'video' ? '\u89c6\u9891' : '\u56fe\u7247'}</div>
+            <div className="flex flex-col items-center gap-2 text-sm">
+              <FileImage size={24} />
+              <span>{statusText(item.status)}</span>
+            </div>
+          )}
+          <div className="absolute left-2 top-2 rounded-[7px] bg-black/58 px-2 py-0.5 text-[11px] text-white">{item.kind === 'video' ? '\u89c6\u9891' : '\u56fe\u7247'}</div>
+          {canOpen && (
+            <div className="absolute inset-0 grid place-items-center bg-black/0 opacity-0 transition group-hover:bg-black/20 group-hover:opacity-100">
+              <span className="grid h-10 w-10 place-items-center rounded-full bg-white/90 text-neutral-950 shadow-sm">
+                {isVideo ? <Play size={18} fill="currentColor" /> : <Maximize2 size={18} />}
+              </span>
+            </div>
+          )}
+        </button>
         {canOpen && (
-          <div className="absolute inset-0 grid place-items-center bg-black/0 opacity-0 transition group-hover:bg-black/20 group-hover:opacity-100">
-            <span className="grid h-10 w-10 place-items-center rounded-full bg-white/90 text-neutral-950 shadow-sm">
-              {isVideo ? <Play size={18} fill="currentColor" /> : <Maximize2 size={18} />}
-            </span>
-          </div>
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={!canDownload}
+            className="absolute right-2 top-2 z-10 grid h-9 w-9 place-items-center rounded-[8px] bg-white/92 text-[#101318] shadow-sm transition hover:bg-white disabled:cursor-wait disabled:opacity-70"
+            title="下载作品"
+            aria-label="下载作品"
+          >
+            {downloading ? <Loader2 size={17} className="animate-spin" /> : <Download size={17} />}
+          </button>
         )}
-      </button>
+      </div>
       <div className="flex items-center gap-1.5 px-2.5 py-2 text-[12px] text-[#667085]">
         <span className="shrink-0">{fmtRelative(item.created_at)}</span>
         {prompt && <span className="truncate text-[#475467]">{prompt}</span>}
@@ -1432,6 +1461,8 @@ function GeneratingDots() {
 }
 
 function PreviewLightbox({ preview, onClose }: { preview: { url: string; type: 'image' | 'video'; title: string }; onClose: () => void }) {
+  const [downloading, setDownloading] = useState(false);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -1440,17 +1471,43 @@ function PreviewLightbox({ preview, onClose }: { preview: { url: string; type: '
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await downloadMedia(preview.url, preview.title || preview.type);
+      toast.success('下载已开始');
+    } catch {
+      toast.error('下载失败，请稍后重试');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" onMouseDown={onClose}>
       <div className="relative max-h-[92vh] max-w-[92vw]" onMouseDown={(e) => e.stopPropagation()}>
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute right-3 top-3 z-10 grid h-9 w-9 place-items-center rounded-full bg-white/90 text-neutral-900 shadow-sm transition hover:bg-white"
-          title="关闭"
-        >
-          <X size={18} />
-        </button>
+        <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={downloading}
+            className="grid h-9 w-9 place-items-center rounded-full bg-white/90 text-neutral-900 shadow-sm transition hover:bg-white disabled:cursor-wait disabled:opacity-70"
+            title="下载作品"
+            aria-label="下载作品"
+          >
+            {downloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-9 w-9 place-items-center rounded-full bg-white/90 text-neutral-900 shadow-sm transition hover:bg-white"
+            title="关闭"
+            aria-label="关闭"
+          >
+            <X size={18} />
+          </button>
+        </div>
         {preview.type === 'video' ? (
           <video src={preview.url} controls autoPlay className="max-h-[92vh] max-w-[92vw] rounded-[12px] bg-black shadow-2xl" />
         ) : (
@@ -1459,6 +1516,54 @@ function PreviewLightbox({ preview, onClose }: { preview: { url: string; type: '
       </div>
     </div>
   );
+}
+
+async function downloadMedia(src: string, fallbackName: string) {
+  const file = await fetchAuthedFile(src, fallbackName);
+  const url = URL.createObjectURL(file.blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = file.filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function fetchAuthedFile(src: string, fallbackName: string) {
+  const token = loadToken();
+  const headers: Record<string, string> = {};
+  if (token?.access) headers.Authorization = `${token.type || 'Bearer'} ${token.access}`;
+  const resp = await fetch(src, { headers, credentials: 'include' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const blob = await resp.blob();
+  return {
+    blob,
+    filename: guessDownloadFilename(src, resp.headers.get('content-type') || blob.type, fallbackName),
+  };
+}
+
+function guessDownloadFilename(src: string, contentType: string, fallbackName: string) {
+  const ext = guessDownloadExt(contentType, src);
+  const cleanSrc = src.replace(/\?.*$/, '');
+  const fromUrl = cleanSrc.replace(/^.*\//, '');
+  const base = (fromUrl || fallbackName || 'dapo-generation')
+    .replace(/\.(png|jpe?g|webp|gif|mp4|webm)$/i, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+  return `${base || 'dapo-generation'}${ext}`;
+}
+
+function guessDownloadExt(contentType: string, src: string) {
+  const lower = `${contentType} ${src}`.toLowerCase();
+  if (lower.includes('video/mp4') || lower.includes('.mp4')) return '.mp4';
+  if (lower.includes('video/webm') || lower.includes('.webm')) return '.webm';
+  if (lower.includes('image/png') || lower.includes('.png')) return '.png';
+  if (lower.includes('image/jpeg') || lower.includes('image/jpg') || lower.includes('.jpg') || lower.includes('.jpeg')) return '.jpg';
+  if (lower.includes('image/webp') || lower.includes('.webp')) return '.webp';
+  if (lower.includes('image/gif') || lower.includes('.gif')) return '.gif';
+  return '';
 }
 
 function modeFromPath(pathname: string): StudioMode {

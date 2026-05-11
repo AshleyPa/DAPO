@@ -17,6 +17,8 @@ declare global {
 }
 
 const TURNSTILE_SCRIPT_ID = 'cf-turnstile-script';
+const TURNSTILE_WEBVIEW_TIMEOUT_MS = 15000;
+const TURNSTILE_DEFAULT_TIMEOUT_MS = 24000;
 let turnstileScriptPromise: Promise<void> | null = null;
 
 export function useHumanVerification(action: HumanVerificationAction): {
@@ -102,7 +104,36 @@ function HumanVerificationWidget({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
+  const timeoutRef = useRef<number | null>(null);
+  const solvedRef = useRef(false);
+  const isWeChat = useMemo(isWeChatWebView, []);
   const [runtimeError, setRuntimeError] = useState('');
+
+  const clearWatchdog = useCallback(() => {
+    if (timeoutRef.current) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, []);
+
+  const startWatchdog = useCallback(() => {
+    clearWatchdog();
+    solvedRef.current = false;
+    timeoutRef.current = window.setTimeout(() => {
+      if (solvedRef.current) return;
+      onToken('');
+      setRuntimeError(turnstileMessage('timeout', undefined, isWeChat));
+    }, isWeChat ? TURNSTILE_WEBVIEW_TIMEOUT_MS : TURNSTILE_DEFAULT_TIMEOUT_MS);
+  }, [clearWatchdog, isWeChat, onToken]);
+
+  const resetWidget = useCallback(() => {
+    onToken('');
+    setRuntimeError('');
+    if (widgetIdRef.current && window.turnstile) {
+      window.turnstile.reset(widgetIdRef.current);
+      startWatchdog();
+    }
+  }, [onToken, startWatchdog]);
 
   useEffect(() => {
     if (!siteKey || error) return;
@@ -117,40 +148,54 @@ function HumanVerificationWidget({
           theme: 'auto',
           size: 'flexible',
           callback: (value: string) => {
+            solvedRef.current = true;
+            clearWatchdog();
             setRuntimeError('');
             onToken(value);
           },
           'expired-callback': () => {
+            clearWatchdog();
             onToken('');
             setRuntimeError('人机验证已过期，请重新验证');
           },
-          'error-callback': () => {
+          'error-callback': (code?: string) => {
+            clearWatchdog();
             onToken('');
-            setRuntimeError('人机验证加载失败，请刷新页面');
+            setRuntimeError(turnstileMessage('error', code, isWeChat));
+          },
+          'timeout-callback': () => {
+            clearWatchdog();
+            onToken('');
+            setRuntimeError(turnstileMessage('timeout', undefined, isWeChat));
+          },
+          'unsupported-callback': () => {
+            clearWatchdog();
+            onToken('');
+            setRuntimeError(turnstileMessage('unsupported', undefined, isWeChat));
           },
         });
+        startWatchdog();
       })
       .catch(() => {
         if (!alive) return;
+        clearWatchdog();
         onToken('');
-        setRuntimeError('人机验证脚本加载失败，请检查网络');
+        setRuntimeError(turnstileMessage('script', undefined, isWeChat));
       });
     return () => {
       alive = false;
+      clearWatchdog();
       if (widgetIdRef.current && window.turnstile) {
         window.turnstile.remove(widgetIdRef.current);
       }
       widgetIdRef.current = null;
       onToken('');
     };
-  }, [action, error, onToken, siteKey]);
+  }, [action, clearWatchdog, error, isWeChat, onToken, siteKey, startWatchdog]);
 
   useEffect(() => {
-    if (!widgetIdRef.current || !window.turnstile) return;
-    window.turnstile.reset(widgetIdRef.current);
-    onToken('');
-    setRuntimeError('');
-  }, [onToken, resetSignal]);
+    resetWidget();
+  }, [resetSignal, resetWidget]);
 
   if (error || !siteKey) {
     return (
@@ -163,9 +208,34 @@ function HumanVerificationWidget({
   return (
     <div className="space-y-2">
       <div ref={containerRef} className="min-h-[65px] overflow-hidden rounded-2xl" />
-      {runtimeError && <p className="field-error">{runtimeError}</p>}
+      {runtimeError && (
+        <div className="space-y-2">
+          <p className="field-error">{runtimeError}</p>
+          <button
+            type="button"
+            onClick={resetWidget}
+            className="inline-flex h-9 items-center rounded-full border border-neutral-200 px-3 text-xs text-neutral-700 transition hover:border-neutral-300 hover:bg-neutral-50"
+          >
+            重新验证
+          </button>
+        </div>
+      )}
     </div>
   );
+}
+
+function isWeChatWebView() {
+  if (typeof navigator === 'undefined') return false;
+  return /MicroMessenger/i.test(navigator.userAgent);
+}
+
+function turnstileMessage(kind: 'error' | 'timeout' | 'unsupported' | 'script', code?: string, isWeChat = false) {
+  const suffix = isWeChat ? '微信内置浏览器可能限制了验证组件，请重试；如果仍失败，请从右上角菜单选择在浏览器中打开。' : '请重试，或刷新页面后再登录。';
+  if (kind === 'timeout') return `人机验证超时。${suffix}`;
+  if (kind === 'unsupported') return `当前浏览器环境不支持人机验证。${suffix}`;
+  if (kind === 'script') return `人机验证脚本加载失败。${suffix}`;
+  const codeText = code ? `（错误码：${code}）` : '';
+  return `人机验证加载失败${codeText}。${suffix}`;
 }
 
 function loadTurnstileScript() {
