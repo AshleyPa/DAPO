@@ -178,7 +178,7 @@ class Media {
   }
 
   private createMesh() {
-    const texture = new Texture(this.gl, { generateMipmaps: true });
+    const texture = new Texture(this.gl, { generateMipmaps: false });
     const program = new Program(this.gl, {
       depthTest: false,
       depthWrite: false,
@@ -267,14 +267,19 @@ class Media {
       img.crossOrigin = 'anonymous';
       img.onload = () => setTextureImage(img, img.naturalWidth, img.naturalHeight);
       img.onerror = () => {
-        if (allowFallback && this.item.fallbackImage && this.item.fallbackImage !== src) {
-          loadImage(this.item.fallbackImage, false);
+        const fallbackImage = this.item.fallbackImage;
+        const canUseImageFallback = fallbackImage
+          && fallbackImage !== src
+          && !fallbackImage.startsWith('data:image/svg+xml');
+        if (allowFallback && canUseImageFallback) {
+          loadImage(fallbackImage, false);
           return;
         }
         setCanvasFallback();
       };
       img.src = src;
     };
+    setCanvasFallback();
     loadImage(this.item.image, true);
   }
 

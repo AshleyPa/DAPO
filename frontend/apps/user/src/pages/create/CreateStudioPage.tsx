@@ -1,4 +1,6 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
 import {
@@ -49,6 +51,7 @@ const GENERATING_PHRASES = [
 const IMAGE_MODELS = [
   { code: 'gpt-image-2', label: 'GPT Image 2', cost: 4 },
 ];
+const PRIMARY_IMAGE_MODEL_CODES = new Set(['gpt-image-2']);
 
 type SelectModel = {
   code: string;
@@ -56,6 +59,33 @@ type SelectModel = {
   cost?: number;
   input?: number;
   output?: number;
+};
+
+type RichEffectTuning = {
+  frameRate: 30 | 45 | 60;
+  galleryDpr: number;
+  galleryAntialias: boolean;
+  galleryWidthSegments: number;
+  galleryHeightSegments: number;
+  galaxyDensity: number;
+};
+
+const STANDARD_RICH_TUNING: RichEffectTuning = {
+  frameRate: 60,
+  galleryDpr: 1.5,
+  galleryAntialias: true,
+  galleryWidthSegments: 100,
+  galleryHeightSegments: 50,
+  galaxyDensity: 1,
+};
+
+const WEBKIT_DESKTOP_RICH_TUNING: RichEffectTuning = {
+  frameRate: 45,
+  galleryDpr: 1,
+  galleryAntialias: false,
+  galleryWidthSegments: 64,
+  galleryHeightSegments: 32,
+  galaxyDensity: 0.72,
 };
 
 const VIDEO_MODELS = [
@@ -71,7 +101,7 @@ const TEXT_MODELS = [
   { code: 'gpt-4o-mini', label: 'GPT 4o mini', input: 1, output: 3 },
 ];
 
-const IMAGE_RATIOS = ['1:1', '3:2', '2:3', '4:3', '3:4', '5:4', '4:5', '16:9', '9:16', '21:9'] as const;
+const IMAGE_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9', '5:4', '4:5'] as const;
 const IMAGE_RESOLUTIONS = ['1K', '2K', '4K'] as const;
 const VIDEO_RATIOS = ['16:9', '9:16', '1:1'] as const;
 const VIDEO_DURATIONS = [6, 10] as const;
@@ -79,6 +109,8 @@ const HISTORY_PAGE_SIZES = [20, 50, 100] as const;
 type HistoryDeleteScope = 'before_3d' | 'before_7d' | 'all';
 const TEXT_MAX_ATTACHMENTS = 5;
 const VIDEO_MAX_ATTACHMENTS = 7;
+const PROMPT_COVER_PLACEHOLDER =
+  'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 900 1200%22%3E%3Cdefs%3E%3CradialGradient id=%22a%22 cx=%2254%25%22 cy=%2232%25%22 r=%2268%25%22%3E%3Cstop offset=%220%25%22 stop-color=%22%23f8fafc%22 stop-opacity=%22.28%22/%3E%3Cstop offset=%2242%25%22 stop-color=%22%2367e8f9%22 stop-opacity=%22.12%22/%3E%3Cstop offset=%22100%25%22 stop-color=%22%2307060a%22 stop-opacity=%220%22/%3E%3C/radialGradient%3E%3ClinearGradient id=%22b%22 x1=%220%22 y1=%220%22 x2=%221%22 y2=%221%22%3E%3Cstop stop-color=%22%23110f18%22/%3E%3Cstop offset=%22.52%22 stop-color=%22%23201b2b%22/%3E%3Cstop offset=%221%22 stop-color=%22%23060508%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%22900%22 height=%221200%22 fill=%22url(%23b)%22/%3E%3Crect width=%22900%22 height=%221200%22 fill=%22url(%23a)%22/%3E%3Cpath d=%22M96 965 C248 850 338 890 455 780 C565 678 662 660 804 548%22 fill=%22none%22 stroke=%22%23ffffff%22 stroke-opacity=%22.22%22 stroke-width=%223%22/%3E%3Ccircle cx=%22716%22 cy=%22196%22 r=%223%22 fill=%22%23fff%22 fill-opacity=%22.72%22/%3E%3Ccircle cx=%22178%22 cy=%22326%22 r=%222%22 fill=%22%23fff%22 fill-opacity=%22.42%22/%3E%3Ccircle cx=%22564%22 cy=%22886%22 r=%222.4%22 fill=%22%23fff%22 fill-opacity=%22.5%22/%3E%3Crect x=%2276%22 y=%2276%22 width=%22748%22 height=%221048%22 rx=%2238%22 fill=%22none%22 stroke=%22%23ffffff%22 stroke-opacity=%22.16%22 stroke-width=%222%22/%3E%3C/svg%3E';
 const FALLBACK_PROMPT_GALLERY: Record<StudioMode, PromptGalleryCard[]> = {
   image: [
   {
@@ -224,7 +256,7 @@ export default function CreateStudioPage() {
     staleTime: 60_000,
   });
 
-  const imageModels = useMemo(() => modelsByKind(modelCatalog.data, 'image', IMAGE_MODELS), [modelCatalog.data]);
+  const imageModels = useMemo(() => imageModelsByCatalog(modelCatalog.data), [modelCatalog.data]);
   const textModels = useMemo(() => modelsByKind(modelCatalog.data, 'text', TEXT_MODELS), [modelCatalog.data]);
   const videoModels = useMemo(() => modelsByKind(modelCatalog.data, 'video', VIDEO_MODELS), [modelCatalog.data]);
 
@@ -256,7 +288,7 @@ export default function CreateStudioPage() {
 
   const promptGalleryCards = useMemo(() => {
     const remote = (promptGallery.data ?? [])
-      .filter((item) => item.title && item.cover_url && item.prompt)
+      .filter((item) => item.title && item.prompt)
       .map(promptGalleryItemToCard);
     return remote.length ? remote : FALLBACK_PROMPT_GALLERY[mode];
   }, [promptGallery.data, mode]);
@@ -440,7 +472,7 @@ export default function CreateStudioPage() {
             <Galaxy
               mouseRepulsion
               mouseInteraction
-              density={1}
+              density={motionProfile.richTuning.galaxyDensity}
               glowIntensity={0.4}
               saturation={0.2}
               hueShift={30}
@@ -450,7 +482,7 @@ export default function CreateStudioPage() {
               autoCenterRepulsion={0}
               starSpeed={0.5}
               speed={1}
-              frameRate={60}
+              frameRate={motionProfile.richTuning.frameRate}
               dpr={1}
             />
           </Suspense>
@@ -471,6 +503,7 @@ export default function CreateStudioPage() {
             expectedCost={expectedCost}
             inProgress={!!inProgress}
             supportsRichEffects={motionProfile.supportsRichEffects}
+            richTuning={motionProfile.richTuning}
             onOpen={setPreview}
           />
 
@@ -489,7 +522,7 @@ export default function CreateStudioPage() {
             >
               <div className="dapo-composer-card p-4 text-white sm:p-5">
               <div className="mb-5 flex flex-col gap-2">
-                <PromptGalleryRail cards={promptGalleryCards} compactMotion={compactMotion} supportsRichEffects={motionProfile.supportsRichEffects} onPick={fillPromptFromCard} />
+                <PromptGalleryRail cards={promptGalleryCards} compactMotion={compactMotion} supportsRichEffects={motionProfile.supportsRichEffects} richTuning={motionProfile.richTuning} onPick={fillPromptFromCard} />
               </div>
 
               <div className="dapo-prompt-panel rounded-[8px] border border-[#d7dde5] bg-[#fbfcfd] p-3 sm:p-4">
@@ -540,6 +573,8 @@ export default function CreateStudioPage() {
                     参考图
                   </button>
                   <ComposerSelect
+                    label="生成模型"
+                    ariaLabel={`${modeTitle(mode)}生成模型`}
                     value={activeModelCode}
                     onChange={(v) => mode === 'video' ? setVideoModel(v) : mode === 'text' ? setTextModel(v) : setImageModel(v)}
                     options={activeModels.map((m) => ({ value: m.code, label: m.label }))}
@@ -547,21 +582,21 @@ export default function CreateStudioPage() {
                   />
                   {mode === 'image' && (
                     <>
-                      <ComposerSelect value={imageRatio} onChange={(v) => setImageRatio(v as typeof IMAGE_RATIOS[number])} options={IMAGE_RATIOS.map((r) => ({ value: r, label: r }))} />
-                      <ComposerSelect value={imageResolution} onChange={(v) => setImageResolution(v as typeof IMAGE_RESOLUTIONS[number])} options={IMAGE_RESOLUTIONS.map((r) => ({ value: r, label: r }))} />
-                      <ComposerSelect value={String(count)} onChange={(v) => setCount(Number(v))} options={[1, 2, 4].map((n) => ({ value: String(n), label: `${n}张` }))} />
+                      <ComposerSelect label="比例" ariaLabel="图片比例" value={imageRatio} onChange={(v) => setImageRatio(v as typeof IMAGE_RATIOS[number])} options={IMAGE_RATIOS.map((r) => ({ value: r, label: r }))} />
+                      <ComposerSelect label="清晰度" ariaLabel="图片清晰度" value={imageResolution} onChange={(v) => setImageResolution(v as typeof IMAGE_RESOLUTIONS[number])} options={IMAGE_RESOLUTIONS.map((r) => ({ value: r, label: r }))} />
+                      <ComposerSelect label="数量" ariaLabel="图片数量" value={String(count)} onChange={(v) => setCount(Number(v))} options={[1, 2, 4].map((n) => ({ value: String(n), label: `${n}张` }))} />
                     </>
                   )}
                   {mode === 'video' && (
                     <>
-                      <ComposerSelect value={videoRatio} onChange={(v) => setVideoRatio(v as typeof VIDEO_RATIOS[number])} options={VIDEO_RATIOS.map((r) => ({ value: r, label: r }))} />
-                      <ComposerSelect value={String(duration)} onChange={(v) => setDuration(Number(v) as typeof VIDEO_DURATIONS[number])} options={VIDEO_DURATIONS.map((n) => ({ value: String(n), label: `${n}s` }))} />
+                      <ComposerSelect label="比例" ariaLabel="视频比例" value={videoRatio} onChange={(v) => setVideoRatio(v as typeof VIDEO_RATIOS[number])} options={VIDEO_RATIOS.map((r) => ({ value: r, label: r }))} />
+                      <ComposerSelect label="时长" ariaLabel="视频时长" value={String(duration)} onChange={(v) => setDuration(Number(v) as typeof VIDEO_DURATIONS[number])} options={VIDEO_DURATIONS.map((n) => ({ value: String(n), label: `${n}s` }))} />
                     </>
                   )}
                 </div>
                 <div className="flex shrink-0 items-center justify-between gap-2 sm:justify-end">
-                  <span className="hidden h-10 items-center rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#475467] sm:inline-flex">
-                    预计 {typeof expectedCost === 'number' ? `${expectedCost} 点` : expectedCost}
+                  <span className="dapo-cost-chip inline-flex h-10 items-center justify-center rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#475467]">
+                    消耗预估 {typeof expectedCost === 'number' ? `${expectedCost} 点` : expectedCost}
                   </span>
                   <button className="grid h-10 w-10 place-items-center rounded-[8px] border border-[#d7dde5] bg-white text-[#667085] transition hover:text-[#101318]" title="语音输入" type="button">
                     <Mic size={17} />
@@ -592,6 +627,8 @@ export default function CreateStudioPage() {
             </div>
             <div className="flex items-center gap-2">
               <ComposerSelect
+                label="显示"
+                ariaLabel="作品显示数量"
                 value={String(historyPageSize)}
                 onChange={(v) => setHistoryPageSize(Number(v) as typeof HISTORY_PAGE_SIZES[number])}
                 options={HISTORY_PAGE_SIZES.map((n) => ({ value: String(n), label: `${n}个` }))}
@@ -648,6 +685,7 @@ function DevelopmentStage({
   expectedCost,
   inProgress,
   supportsRichEffects,
+  richTuning,
   onOpen,
 }: {
   mode: StudioMode;
@@ -659,6 +697,7 @@ function DevelopmentStage({
   expectedCost: string | number;
   inProgress: boolean;
   supportsRichEffects: boolean;
+  richTuning: RichEffectTuning;
   onOpen: (preview: { url: string; type: 'image' | 'video'; title: string }) => void;
 }) {
   const activeItem = task;
@@ -734,7 +773,7 @@ function DevelopmentStage({
                   strokeColor="#7dd3fc"
                   strokeWidth={8}
                   planeBaseHeight={7.2}
-                  frameRate={45}
+                  frameRate={richTuning.frameRate}
                 />
               </Suspense>
             </div>
@@ -793,15 +832,27 @@ function ParameterStrip({
   );
 }
 
-function PromptGalleryRail({ cards, compactMotion, supportsRichEffects, onPick }: { cards: PromptGalleryCard[]; compactMotion: boolean; supportsRichEffects: boolean; onPick: (card: PromptGalleryCard) => void }) {
+function PromptGalleryRail({
+  cards,
+  compactMotion,
+  supportsRichEffects,
+  richTuning,
+  onPick,
+}: {
+  cards: PromptGalleryCard[];
+  compactMotion: boolean;
+  supportsRichEffects: boolean;
+  richTuning: RichEffectTuning;
+  onPick: (card: PromptGalleryCard) => void;
+}) {
   const items = useMemo(
     () =>
-      cards.map((card, index) => ({
+      cards.map((card) => ({
         id: String(card.id ?? card.title),
         title: card.title,
         subtitle: card.subtitle,
         image: card.image,
-        fallbackImage: promptGalleryFallbackImage(index),
+        fallbackImage: PROMPT_COVER_PLACEHOLDER,
         prompt: card.prompt,
       })),
     [cards],
@@ -832,11 +883,11 @@ function PromptGalleryRail({ cards, compactMotion, supportsRichEffects, onPick }
             scrollEase={0.04}
             textColor="#ffffff"
             font={compactMotion ? 'bold 22px Figtree' : 'bold 30px Figtree'}
-            frameRate={60}
-            dpr={1.5}
-            antialias
-            widthSegments={100}
-            heightSegments={50}
+            frameRate={richTuning.frameRate}
+            dpr={richTuning.galleryDpr}
+            antialias={richTuning.galleryAntialias}
+            widthSegments={richTuning.galleryWidthSegments}
+            heightSegments={richTuning.galleryHeightSegments}
             onSelect={handleSelect}
           />
         </Suspense>
@@ -852,31 +903,48 @@ function useStudioMotionProfile() {
     isMobile: boolean;
     prefersReducedMotion: boolean;
     isConstrained: boolean;
-    isWebKitRisk: boolean;
+    isWebKit: boolean;
+    hasWebGL: boolean;
     supportsRichEffects: boolean;
+    richTuning: RichEffectTuning;
   };
 
   const getProfile = () => {
     if (typeof window === 'undefined') {
-      return { isMobile: false, prefersReducedMotion: false, isConstrained: false, isWebKitRisk: false, supportsRichEffects: true };
+      return {
+        isMobile: false,
+        prefersReducedMotion: false,
+        isConstrained: false,
+        isWebKit: false,
+        hasWebGL: true,
+        supportsRichEffects: true,
+        richTuning: STANDARD_RICH_TUNING,
+      };
     }
     const width = window.innerWidth || 1440;
     const coarse = window.matchMedia('(pointer: coarse)').matches;
     const small = window.matchMedia('(max-width: 720px)').matches;
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const cores = navigator.hardwareConcurrency || 8;
+    const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory || 8;
     const ua = navigator.userAgent;
     const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     const isSafari = /^((?!chrome|android|crios|fxios|edg|opr).)*safari/i.test(ua);
     const isWechat = /MicroMessenger/i.test(ua);
+    const isMobile = small || isIOS || isWechat || (coarse && width <= 900);
+    const isConstrained = (cores <= 4 || memory <= 4) && width <= 1100;
+    const hasWebGL = canUseWebGL();
+    const isWebKit = isIOS || isSafari || isWechat;
     const profile: Profile = {
-      isMobile: small || (coarse && width <= 900),
+      isMobile,
       prefersReducedMotion: reduced,
-      isConstrained: cores <= 4 && width <= 1100,
-      isWebKitRisk: isIOS || isSafari || isWechat,
+      isConstrained,
+      isWebKit,
+      hasWebGL,
       supportsRichEffects: false,
+      richTuning: isSafari && !isMobile ? WEBKIT_DESKTOP_RICH_TUNING : STANDARD_RICH_TUNING,
     };
-    profile.supportsRichEffects = !profile.isMobile && !profile.prefersReducedMotion && !profile.isConstrained && !profile.isWebKitRisk;
+    profile.supportsRichEffects = !profile.isMobile && !profile.prefersReducedMotion && !profile.isConstrained && profile.hasWebGL;
     return profile;
   };
 
@@ -898,6 +966,15 @@ function useStudioMotionProfile() {
   }, []);
 
   return profile;
+}
+
+function canUseWebGL() {
+  try {
+    const canvas = document.createElement('canvas');
+    return !!(canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl'));
+  } catch {
+    return false;
+  }
 }
 
 function LightweightGalaxy() {
@@ -929,7 +1006,15 @@ function LitePromptGallery({
           onClick={() => onSelect(item)}
         >
           <span className="dapo-lite-gallery__image">
-            <img src={item.image} alt="" loading={index < 3 ? 'eager' : 'lazy'} onError={(e) => { e.currentTarget.src = item.fallbackImage ?? promptGalleryFallbackImage(index); }} />
+            <img
+              src={item.image}
+              alt=""
+              loading={index < 3 ? 'eager' : 'lazy'}
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = item.fallbackImage ?? PROMPT_COVER_PLACEHOLDER;
+              }}
+            />
           </span>
           <span className="dapo-lite-gallery__title">{item.title}</span>
           {item.subtitle && <span className="dapo-lite-gallery__subtitle">{item.subtitle}</span>}
@@ -939,48 +1024,208 @@ function LitePromptGallery({
   );
 }
 
-function ComposerSelect({ value, options, onChange, disabled, wide }: { value: string; options: { value: string; label: string }[]; onChange: (value: string) => void; disabled?: boolean; wide?: boolean }) {
+function ComposerSelect({
+  value,
+  options,
+  onChange,
+  disabled,
+  wide,
+  label,
+  ariaLabel,
+}: {
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  wide?: boolean;
+  label?: string;
+  ariaLabel?: string;
+}) {
   const [open, setOpen] = useState(false);
-  const current = options.find((o) => o.value === value) ?? options[0];
+  const currentIndex = Math.max(0, options.findIndex((o) => o.value === value));
+  const [activeIndex, setActiveIndex] = useState(currentIndex);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const [sheetMode, setSheetMode] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const listboxId = useId();
+  const current = options[currentIndex] ?? options[0];
 
-  return (
-    <div
-      className={clsx('composer-select relative min-w-0', wide && 'composer-select--wide')}
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
-      }}
-    >
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
-        className={clsx(
-          'inline-flex h-9 w-full max-w-full items-center gap-1.5 rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#2156d9] outline-none transition',
-          wide && 'min-w-[150px] justify-between',
-          open ? 'border-[#a9b8f4] bg-[#f6f8ff]' : 'hover:border-[#b8c0cc]',
-          disabled && 'cursor-not-allowed text-[#98a2b3] hover:border-[#d7dde5]',
-        )}
-      >
-        <span>{current?.label}</span>
-        <ChevronDown size={15} className={clsx('transition', open && 'rotate-180')} />
-      </button>
+  const placeMenu = useCallback(() => {
+    const button = buttonRef.current;
+    if (!button || typeof window === 'undefined') return;
+    const rect = button.getBoundingClientRect();
+    const shouldUseSheet = window.matchMedia('(max-width: 720px)').matches || (window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 900);
+    setSheetMode(shouldUseSheet);
+    if (shouldUseSheet) {
+      setMenuStyle({});
+      return;
+    }
+    const minWidth = wide ? Math.max(220, rect.width) : Math.max(148, rect.width);
+    const viewportGap = 12;
+    const below = window.innerHeight - rect.bottom - viewportGap;
+    const above = rect.top - viewportGap;
+    const maxHeight = Math.max(160, Math.min(360, Math.max(below, above)));
+    const openAbove = below < 220 && above > below;
+    const top = openAbove ? Math.max(viewportGap, rect.top - maxHeight - 8) : Math.min(window.innerHeight - viewportGap - 80, rect.bottom + 8);
+    const left = Math.min(Math.max(viewportGap, rect.left), Math.max(viewportGap, window.innerWidth - minWidth - viewportGap));
+    setMenuStyle({ left, top, minWidth, maxHeight });
+  }, [wide]);
 
-      {open && !disabled && (
-        <div className={clsx('absolute left-0 top-11 z-30 overflow-hidden rounded-[8px] border border-[#dfe3e8] bg-white p-1.5 shadow-[0_18px_50px_rgba(15,23,42,.14)]', wide ? 'min-w-[210px]' : 'min-w-[132px]')}>
-          {options.map((o) => {
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    placeMenu();
+    const onUpdate = () => placeMenu();
+    window.addEventListener('resize', onUpdate);
+    window.addEventListener('scroll', onUpdate, true);
+    return () => {
+      window.removeEventListener('resize', onUpdate);
+      window.removeEventListener('scroll', onUpdate, true);
+    };
+  }, [open, placeMenu]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    setActiveIndex(currentIndex);
+    const timer = window.setTimeout(() => optionRefs.current[currentIndex]?.focus(), 0);
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [currentIndex, open]);
+
+  const commit = useCallback((nextValue: string) => {
+    onChange(nextValue);
+    setOpen(false);
+    window.requestAnimationFrame(() => buttonRef.current?.focus());
+  }, [onChange]);
+
+  const moveActive = useCallback((delta: number) => {
+    if (!options.length) return;
+    setActiveIndex((index) => {
+      const next = (index + delta + options.length) % options.length;
+      window.requestAnimationFrame(() => optionRefs.current[next]?.focus());
+      return next;
+    });
+  }, [options.length]);
+
+  const handleButtonKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveIndex(event.key === 'ArrowDown' ? currentIndex : Math.max(0, currentIndex - 1));
+      setOpen(true);
+    }
+  };
+
+  const handleMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setOpen(false);
+      buttonRef.current?.focus();
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      const next = options[activeIndex];
+      if (next) commit(next.value);
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveActive(1);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveActive(-1);
+      return;
+    }
+    if (event.key === 'Home') {
+      event.preventDefault();
+      setActiveIndex(0);
+      window.requestAnimationFrame(() => optionRefs.current[0]?.focus());
+      return;
+    }
+    if (event.key === 'End') {
+      event.preventDefault();
+      const last = options.length - 1;
+      setActiveIndex(last);
+      window.requestAnimationFrame(() => optionRefs.current[last]?.focus());
+    }
+  };
+
+  const menu = open && !disabled && typeof document !== 'undefined'
+    ? createPortal(
+      sheetMode ? (
+        <div className="fixed inset-0 z-[80] bg-black/42 backdrop-blur-sm" role="presentation">
+          <div
+            ref={menuRef}
+            role="listbox"
+            id={listboxId}
+            aria-label={ariaLabel ?? label ?? '选择'}
+            tabIndex={-1}
+            onKeyDown={handleMenuKeyDown}
+            className="fixed inset-x-3 bottom-3 max-h-[74vh] overflow-auto rounded-[16px] border border-white/12 bg-[#111018] p-2 shadow-[0_24px_80px_rgba(0,0,0,.52)]"
+          >
+            {label && <div className="px-3 py-2 text-[12px] text-white/48">{label}</div>}
+            {options.map((o, index) => {
+              const selected = o.value === value;
+              return (
+                <button
+                  key={o.value}
+                  ref={(node) => { optionRefs.current[index] = node; }}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onFocus={() => setActiveIndex(index)}
+                  onClick={() => commit(o.value)}
+                  className={clsx(
+                    'flex min-h-12 w-full items-center justify-between gap-3 rounded-[10px] px-3 text-left text-[14px] transition',
+                    selected ? 'bg-white text-[#101318]' : 'text-white/70 hover:bg-white/10 hover:text-white',
+                    activeIndex === index && !selected && 'bg-white/10 text-white',
+                  )}
+                >
+                  <span className="min-w-0">{o.label}</span>
+                  {selected && <Check size={17} />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div
+          ref={menuRef}
+          role="listbox"
+          id={listboxId}
+          aria-label={ariaLabel ?? label ?? '选择'}
+          tabIndex={-1}
+          onKeyDown={handleMenuKeyDown}
+          className="fixed z-[80] overflow-auto rounded-[10px] border border-[#dfe3e8] bg-white p-1.5 shadow-[0_18px_50px_rgba(15,23,42,.18)]"
+          style={menuStyle}
+        >
+          {options.map((o, index) => {
             const selected = o.value === value;
             return (
               <button
                 key={o.value}
+                ref={(node) => { optionRefs.current[index] = node; }}
                 type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  onChange(o.value);
-                  setOpen(false);
-                }}
+                role="option"
+                aria-selected={selected}
+                onFocus={() => setActiveIndex(index)}
+                onClick={() => commit(o.value)}
                 className={clsx(
                   'flex h-10 w-full items-center justify-between gap-3 rounded-[7px] px-3 text-left text-[13px] transition',
                   selected ? 'bg-[#f1f4f8] text-[#101318]' : 'text-[#667085] hover:bg-[#f6f7f8] hover:text-[#101318]',
+                  activeIndex === index && !selected && 'bg-[#f6f7f8] text-[#101318]',
                 )}
               >
                 <span className="min-w-0 truncate">{o.label}</span>
@@ -989,7 +1234,35 @@ function ComposerSelect({ value, options, onChange, disabled, wide }: { value: s
             );
           })}
         </div>
-      )}
+      ),
+      document.body,
+    )
+    : null;
+
+  return (
+    <div className={clsx('composer-select min-w-0', wide && 'composer-select--wide')}>
+      <button
+        ref={buttonRef}
+        type="button"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
+        aria-label={ariaLabel ?? label ?? current?.label ?? '选择'}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={handleButtonKeyDown}
+        className={clsx(
+          'inline-flex h-9 w-full max-w-full items-center gap-1.5 rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#2156d9] outline-none transition focus:border-[#a9b8f4] focus:ring-2 focus:ring-[#dfe7ff]',
+          wide && 'min-w-[150px] justify-between',
+          open ? 'border-[#a9b8f4] bg-[#f6f8ff]' : 'hover:border-[#b8c0cc]',
+          disabled && 'cursor-not-allowed text-[#98a2b3] hover:border-[#d7dde5]',
+        )}
+      >
+        {label && <span className="composer-select__label text-[#667085]">{label}</span>}
+        <span className="composer-select__value">{current?.label}</span>
+        <ChevronDown size={15} className={clsx('transition', open && 'rotate-180')} />
+      </button>
+      {menu}
     </div>
   );
 }
@@ -1026,7 +1299,6 @@ function HistoryActionMenu({
         <div className="absolute right-0 top-11 z-30 min-w-[150px] overflow-hidden rounded-[8px] border border-[#dfe3e8] bg-white p-1.5 shadow-[0_18px_50px_rgba(15,23,42,.14)]">
           <button
             type="button"
-            onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               setOpen(false);
               onDeleteBefore3Days();
@@ -1038,7 +1310,6 @@ function HistoryActionMenu({
           </button>
           <button
             type="button"
-            onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               setOpen(false);
               onDeleteBefore7Days();
@@ -1050,7 +1321,6 @@ function HistoryActionMenu({
           </button>
           <button
             type="button"
-            onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               setOpen(false);
               onDeleteAll();
@@ -1245,14 +1515,26 @@ function promptGalleryItemToCard(item: PromptGalleryItem): PromptGalleryCard {
     id: item.id,
     title: item.title,
     subtitle: item.subtitle,
-    image: item.cover_url,
+    image: item.cover_url || PROMPT_COVER_PLACEHOLDER,
     prompt: item.prompt,
   };
 }
 
-function promptGalleryFallbackImage(index: number) {
-  const fallback = FALLBACK_PROMPT_GALLERY.image[index % FALLBACK_PROMPT_GALLERY.image.length];
-  return fallback?.image ?? '/examples/case-1.jpg';
+function imageModelsByCatalog(models: PublicModel[] | undefined): SelectModel[] {
+  const rows = (models ?? [])
+    .filter((m) => m.enabled !== false && m.kind === 'image' && m.model_code)
+    .filter((m) => PRIMARY_IMAGE_MODEL_CODES.has(m.model_code))
+    .map((m) => ({
+      code: m.model_code,
+      label: imageModelLabel(m),
+      cost: typeof m.unit_points === 'number' ? m.unit_points / 100 : undefined,
+    }));
+  return rows.length ? rows : IMAGE_MODELS;
+}
+
+function imageModelLabel(model: PublicModel) {
+  if (model.model_code === 'gpt-image-2' || model.upstream_model === 'gpt-image-2') return 'GPT Image 2';
+  return model.name || model.model_code;
 }
 
 function modelsByKind(models: PublicModel[] | undefined, kind: PublicModel['kind'], fallback: SelectModel[]): SelectModel[] {

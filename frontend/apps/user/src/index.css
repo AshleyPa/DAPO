@@ -541,6 +541,20 @@
     white-space: nowrap;
   }
 
+  .composer-select__label {
+    flex: 0 0 auto;
+    max-width: 72px;
+  }
+
+  .composer-select__value {
+    flex: 1 1 auto;
+  }
+
+  .dapo-cost-chip {
+    min-width: 0;
+    white-space: nowrap;
+  }
+
   .studio-prompt {
     max-width: 100%;
     overflow-wrap: anywhere;
@@ -1002,6 +1016,11 @@
     flex-shrink: 1;
     min-width: 0;
     width: 100%;
+  }
+
+  .dapo-cost-chip {
+    padding-inline: 10px;
+    font-size: 12px;
   }
 
   .dapo-composer-controls > div:last-child button:last-child {

@@ -26,7 +26,7 @@ export function Logo({ size = 'md', iconOnly = false, suffix, className }: LogoP
       </span>
       {!iconOnly && (
         <span className={clsx(cfg.text, 'leading-none font-medium tracking-tight text-text-primary')}>
-          Studio
+          DAPO
           {suffix && <span className="ml-2 align-middle text-tiny font-medium text-text-tertiary">{suffix}</span>}
         </span>
       )}
