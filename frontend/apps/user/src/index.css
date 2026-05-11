@@ -340,6 +340,101 @@
     animation: dapo-ascii-edge-glow 5.8s ease-in-out infinite alternate;
   }
 
+  .dapo-static-title-stage {
+    position: relative;
+    display: grid;
+    min-height: inherit;
+    width: 100%;
+    max-width: 100%;
+    place-items: center;
+    overflow: hidden;
+    padding: clamp(44px, 8vw, 90px) clamp(24px, 7vw, 104px);
+    contain: layout paint;
+    text-align: center;
+  }
+
+  .dapo-static-title-main {
+    position: relative;
+    display: flex;
+    max-width: min(1180px, calc(100vw - 48px));
+    align-items: baseline;
+    justify-content: center;
+    gap: clamp(12px, 2.2vw, 28px);
+    color: #fff;
+    font-size: clamp(64px, 8.8vw, 150px);
+    font-weight: 650;
+    line-height: .92;
+    letter-spacing: 0;
+    word-break: keep-all;
+    text-shadow:
+      0 0 1px rgba(255, 255, 255, .98),
+      0 0 14px rgba(255, 255, 255, .58),
+      0 0 32px rgba(125, 211, 252, .42),
+      0 0 58px rgba(168, 85, 247, .32),
+      0 0 92px rgba(244, 114, 182, .20);
+    -webkit-text-stroke: .62px rgba(224, 242, 254, .68);
+  }
+
+  .dapo-static-title-main::before,
+  .dapo-static-title-main::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    pointer-events: none;
+    transform: translateX(-50%);
+  }
+
+  .dapo-static-title-main::before {
+    top: 48%;
+    z-index: -1;
+    width: min(76vw, 860px);
+    height: clamp(86px, 12vw, 160px);
+    border-radius: 999px;
+    background:
+      radial-gradient(ellipse at 50% 50%, rgba(255, 255, 255, .16), transparent 62%),
+      linear-gradient(90deg, transparent, rgba(186, 230, 253, .28), rgba(245, 208, 254, .22), transparent);
+    filter: blur(28px);
+    opacity: .76;
+  }
+
+  .dapo-static-title-main::after {
+    bottom: -.18em;
+    width: min(46vw, 520px);
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .64), transparent);
+    opacity: .58;
+  }
+
+  .dapo-static-title-line {
+    display: inline-block;
+    white-space: nowrap;
+  }
+
+  .dapo-static-title-stage--compact {
+    padding: clamp(34px, 10vw, 76px) clamp(18px, 6vw, 72px);
+  }
+
+  .dapo-static-title-stage--compact .dapo-static-title-main {
+    display: grid;
+    gap: clamp(2px, 1.2vw, 8px);
+    max-width: min(820px, calc(100vw - 36px));
+    font-size: clamp(38px, 12vw, 72px);
+    line-height: .98;
+    -webkit-text-stroke: .45px rgba(224, 242, 254, .66);
+  }
+
+  .dapo-static-title-stage--compact .dapo-static-title-main::before {
+    width: min(92vw, 520px);
+    height: clamp(54px, 16vw, 92px);
+    filter: blur(22px);
+    opacity: .72;
+  }
+
+  .dapo-static-title-stage--compact .dapo-static-title-main::after {
+    bottom: -18px;
+    width: min(58vw, 320px);
+  }
+
   .dapo-mobile-title-stage {
     position: relative;
     display: grid;

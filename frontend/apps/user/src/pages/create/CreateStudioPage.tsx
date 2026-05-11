@@ -31,7 +31,6 @@ import { toast } from '../../stores/toast';
 type StudioMode = 'image' | 'text' | 'video';
 const Galaxy = lazy(() => import('../../components/reactbits/Galaxy'));
 const CircularGallery = lazy(() => import('../../components/reactbits/CircularGallery'));
-const ASCIIText = lazy(() => import('../../components/reactbits/ASCIIText'));
 
 type PromptGalleryCard = {
   id?: number;
@@ -265,7 +264,7 @@ export default function CreateStudioPage() {
   const [textModel, setTextModel] = useState(TEXT_MODELS[0]!.code);
   const [imageModel, setImageModel] = useState(IMAGE_MODELS[0]!.code);
   const [videoModel, setVideoModel] = useState(VIDEO_MODELS[0]!.code);
-  const [imageRatio, setImageRatio] = useState<(typeof IMAGE_RATIOS)[number]>('1:1');
+  const [imageRatio, setImageRatio] = useState<(typeof IMAGE_RATIOS)[number]>('9:16');
   const [imageResolution, setImageResolution] = useState<(typeof IMAGE_RESOLUTIONS)[number]>('1K');
   const [videoRatio, setVideoRatio] = useState<(typeof VIDEO_RATIOS)[number]>('16:9');
   const [count, setCount] = useState(1);
@@ -503,7 +502,6 @@ export default function CreateStudioPage() {
             expectedCost={expectedCost}
             inProgress={!!inProgress}
             supportsRichEffects={motionProfile.supportsRichEffects}
-            richTuning={motionProfile.richTuning}
             onOpen={setPreview}
           />
 
@@ -685,7 +683,6 @@ function DevelopmentStage({
   expectedCost,
   inProgress,
   supportsRichEffects,
-  richTuning,
   onOpen,
 }: {
   mode: StudioMode;
@@ -697,7 +694,6 @@ function DevelopmentStage({
   expectedCost: string | number;
   inProgress: boolean;
   supportsRichEffects: boolean;
-  richTuning: RichEffectTuning;
   onOpen: (preview: { url: string; type: 'image' | 'video'; title: string }) => void;
 }) {
   const activeItem = task;
@@ -762,23 +758,9 @@ function DevelopmentStage({
               <GeneratingDots />
             </div>
           ) : supportsRichEffects ? (
-            <div className="dapo-ascii-stage">
-              <Suspense fallback={<MobileStageTitle />}>
-                <ASCIIText
-                  text="让每一个灵感显影"
-                  enableWaves
-                  asciiFontSize={6}
-                  textFontSize={180}
-                  textColor="#ffffff"
-                  strokeColor="#7dd3fc"
-                  strokeWidth={8}
-                  planeBaseHeight={7.2}
-                  frameRate={richTuning.frameRate}
-                />
-              </Suspense>
-            </div>
+            <StaticStageTitle />
           ) : (
-            <MobileStageTitle />
+            <StaticStageTitle compact />
           )}
         </div>
       </div>
@@ -786,12 +768,12 @@ function DevelopmentStage({
   );
 }
 
-function MobileStageTitle() {
+function StaticStageTitle({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="dapo-mobile-title-stage" aria-label="让每一个灵感显影">
-      <span className="dapo-mobile-title-main" aria-hidden="true">
-        <span>让每一个</span>
-        <span>灵感显影</span>
+    <div className={clsx('dapo-static-title-stage', compact && 'dapo-static-title-stage--compact')} aria-label="让每一个灵感显影">
+      <span className="dapo-static-title-main" aria-hidden="true">
+        <span className="dapo-static-title-line">让每一个</span>
+        <span className="dapo-static-title-line">灵感显影</span>
       </span>
     </div>
   );
