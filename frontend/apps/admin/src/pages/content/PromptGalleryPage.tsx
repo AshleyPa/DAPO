@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Edit3, Images, Plus, RefreshCw, Search, Sparkles, Trash2, Upload } from 'lucide-react';
+import { AlertTriangle, Edit3, Images, Plus, RefreshCw, Search, Sparkles, Trash2, Upload } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 
 import { ApiError } from '../../lib/api';
@@ -67,6 +67,7 @@ export default function PromptGalleryPage() {
   const rows = query.data?.list ?? [];
   const total = query.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / pageSize));
+  const hasLocalCachedCover = rows.some((row) => isLocalCachedCover(row.cover_url));
   const queryError =
     query.error instanceof ApiError || query.error instanceof Error
       ? query.error.message
@@ -167,6 +168,13 @@ export default function PromptGalleryPage() {
         </select>
       </div>
 
+      {hasLocalCachedCover && (
+        <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-small text-warning">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <span>当前页存在本地缓存封面，重新部署后可能丢失。请启用 OSS 存储后重新上传这些封面。</span>
+        </div>
+      )}
+
       <div className="card table-wrap">
         <table className="data-table min-w-[1180px]">
           <thead>
@@ -190,7 +198,10 @@ export default function PromptGalleryPage() {
                     <div>
                       <div className="font-semibold text-text-primary">{row.title}</div>
                       {row.subtitle && <div className="line-clamp-1 text-tiny text-text-tertiary">{row.subtitle}</div>}
-                      <div className="text-tiny text-text-tertiary">ID {row.id} · {row.locale || 'zh-CN'}</div>
+                      <div className="flex flex-wrap items-center gap-1 text-tiny text-text-tertiary">
+                        <span>ID {row.id} · {row.locale || 'zh-CN'}</span>
+                        {isLocalCachedCover(row.cover_url) && <span className="badge badge-warning">本地缓存</span>}
+                      </div>
                     </div>
                   </div>
                 </td>
@@ -247,7 +258,11 @@ function PromptGalleryDialog({ form, setForm, saving, onClose, onSave }: { form:
     mutationFn: (file: File) => promptGalleryApi.uploadCover(file),
     onSuccess: (res) => {
       set('cover_url', res.url);
-      toast.success('封面已上传');
+      if (res.storage === 'oss' || !isLocalCachedCover(res.url)) {
+        toast.success('封面已上传到 OSS');
+      } else {
+        toast.info('封面仅保存到本地缓存，重新部署后可能丢失');
+      }
     },
     onError: (e: ApiError | Error) => toast.error(e.message),
   });
@@ -385,6 +400,10 @@ function parseVariables(raw: string): Record<string, unknown> {
     throw new Error('变量 Schema 必须是 JSON 对象');
   }
   return parsed as Record<string, unknown>;
+}
+
+function isLocalCachedCover(url: string) {
+  return url.trim().startsWith('/api/v1/gen/cached/prompt-gallery/');
 }
 
 function modalityLabel(v: string) {

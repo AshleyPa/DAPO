@@ -178,7 +178,7 @@ export const promptGalleryApi = {
   uploadCover: (file: File) => {
     const data = new FormData();
     data.append('file', file);
-    return request<{ url: string }>({ url: '/prompt-gallery/upload-cover', method: 'POST', data });
+    return request<{ url: string; storage?: 'oss' | 'local' }>({ url: '/prompt-gallery/upload-cover', method: 'POST', data });
   },
 };
 

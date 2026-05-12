@@ -190,13 +190,16 @@ func (h *PromptGalleryHandler) UploadCover(c *gin.Context) {
 	localURL := "/api/v1/gen/cached/" + rel
 	if service.PublicAssetUsesOSS(c.Request.Context(), h.cfg) {
 		if ossURL, err := service.UploadPublicAssetToOSS(c.Request.Context(), h.cfg, dst, rel, mime); err == nil && strings.TrimSpace(ossURL) != "" {
-			response.OK(c, gin.H{"url": ossURL})
+			response.OK(c, gin.H{"url": ossURL, "storage": "oss"})
 			return
 		} else if err != nil {
 			logger.FromCtx(c.Request.Context()).Warn("prompt_gallery.cover.oss_upload_failed", zap.Error(err))
 		}
+		_ = os.Remove(dst)
+		response.Fail(c, errcode.Internal.WithMsg("OSS 封面上传失败，请检查系统配置后重新上传；未保存本地临时封面"))
+		return
 	}
-	response.OK(c, gin.H{"url": localURL})
+	response.OK(c, gin.H{"url": localURL, "storage": "local"})
 }
 
 func coverExt(mime, filename string) string {

@@ -219,8 +219,10 @@ func (s *SystemReadinessService) providerRouteChecks(ctx context.Context) []dto.
 
 func (s *SystemReadinessService) storageChecks(ctx context.Context) []dto.AdminSystemReadinessCheck {
 	ossEnabled := false
+	resultDriver := "local"
 	if s.sys != nil {
 		ossEnabled = s.sys.GetBool(ctx, "oss.enabled", false)
+		resultDriver = strings.ToLower(strings.TrimSpace(s.sys.GetString(ctx, "storage.result_cache_driver", "local")))
 	}
 	checks := []dto.AdminSystemReadinessCheck{
 		boolCheck("storage", "oss_enabled", "OSS 存储", ossEnabled, "OSS 已启用", "OSS 未启用，生成结果和快捷提示词封面会优先依赖本地缓存/运行环境存储", "system_config", false),
@@ -228,6 +230,16 @@ func (s *SystemReadinessService) storageChecks(ctx context.Context) []dto.AdminS
 	if !ossEnabled {
 		return checks
 	}
+	checks = append(checks, boolCheck(
+		"storage",
+		"result_cache_driver",
+		"生成结果与快捷封面缓存位置",
+		resultDriver == "oss",
+		"生成结果和快捷提示词封面使用 OSS",
+		"OSS 已启用，但缓存位置不是 OSS，上传封面仍会依赖本地缓存",
+		"system_config",
+		false,
+	))
 	required := []struct {
 		key       string
 		label     string
