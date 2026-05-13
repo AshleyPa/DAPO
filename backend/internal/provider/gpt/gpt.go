@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -906,10 +907,11 @@ func (p *Provider) generateImage2ImagesAPI(ctx context.Context, req *provider.Re
 		count = 1
 	}
 	size := imagesAPIRequestSize(req)
-	quality := imagesAPIQuality(req.Params)
+	prompt := imagesAPIRequestPrompt(req)
+	quality := imagesAPIRequestQuality(req)
 	body := map[string]any{
 		"model":  imageToolModel(req.ModelCode),
-		"prompt": req.Prompt,
+		"prompt": prompt,
 		"n":      count,
 		"size":   size,
 	}
@@ -1014,7 +1016,8 @@ func (p *Provider) generateImage2ImageEditsAPI(ctx context.Context, req *provide
 		count = 1
 	}
 	size := imagesAPIRequestSize(req)
-	quality := imagesAPIQuality(req.Params)
+	prompt := imagesAPIRequestPrompt(req)
+	quality := imagesAPIRequestQuality(req)
 	refs := cleanReferenceImages(req.RefAssets)
 	if len(refs) == 0 {
 		return p.generateImage2ImagesAPI(ctx, req)
@@ -1027,7 +1030,7 @@ func (p *Provider) generateImage2ImageEditsAPI(ctx context.Context, req *provide
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
 	_ = w.WriteField("model", imageToolModel(req.ModelCode))
-	_ = w.WriteField("prompt", req.Prompt)
+	_ = w.WriteField("prompt", prompt)
 	_ = w.WriteField("n", fmt.Sprintf("%d", count))
 	_ = w.WriteField("size", size)
 	_ = w.WriteField("response_format", "url")
@@ -1117,7 +1120,8 @@ func (p *Provider) generateImage2Pic2APIChat(ctx context.Context, req *provider.
 		count = 1
 	}
 	size := imagesAPIRequestSize(req)
-	quality := imagesAPIQuality(req.Params)
+	prompt := imagesAPIRequestPrompt(req)
+	quality := imagesAPIRequestQuality(req)
 	refs := cleanReferenceImages(req.RefAssets)
 	if len(refs) == 0 {
 		return p.generateImage2ImagesAPI(ctx, req)
@@ -1127,7 +1131,7 @@ func (p *Provider) generateImage2Pic2APIChat(ctx context.Context, req *provider.
 		return nil, err
 	}
 	content := make([]map[string]any, 0, 1+len(refs))
-	content = append(content, map[string]any{"type": "text", "text": req.Prompt})
+	content = append(content, map[string]any{"type": "text", "text": prompt})
 	for i, ref := range refs {
 		raw, mime, err := readRefImage(ctx, client, ref)
 		if err != nil {
@@ -1466,10 +1470,122 @@ func imagesAPIRequestSize(req *provider.Request) string {
 		return "1024x1024"
 	}
 	size := imageSize(req.Params, "1024x1024")
-	if imageAPIAdapterMode(req) == imageAPIModePic2API {
+	switch imageAPIAdapterMode(req) {
+	case imageAPIModePic2API:
 		return pic2APIImageSize(req.Params, size)
+	case imageAPIModeImages:
+		return openAICompatibleImageSize(req.Params, size)
 	}
 	return size
+}
+
+func imagesAPIRequestPrompt(req *provider.Request) string {
+	if req == nil {
+		return ""
+	}
+	prompt := req.Prompt
+	switch imageAPIAdapterMode(req) {
+	case imageAPIModeImages, imageAPIModePic2API:
+		return promptWithAspectRatioHint(prompt, strParam(req.Params, "ratio", strParam(req.Params, "aspect_ratio", "")))
+	default:
+		return prompt
+	}
+}
+
+func imagesAPIRequestQuality(req *provider.Request) string {
+	if req == nil {
+		return ""
+	}
+	switch imageAPIAdapterMode(req) {
+	case imageAPIModeImages:
+		return openAICompatibleImagesAPIQuality(req.Params)
+	default:
+		return imagesAPIQuality(req.Params)
+	}
+}
+
+func openAICompatibleImageSize(params map[string]any, fallback string) string {
+	if explicit := strParam(params, "size", ""); explicit != "" {
+		if isOpenAICompatibleImageSize(explicit) {
+			return strings.ToLower(strings.TrimSpace(explicit))
+		}
+		if size := openAICompatibleImageSizeForCanvas(explicit); size != "" {
+			return size
+		}
+	}
+	ratio := strParam(params, "ratio", strParam(params, "aspect_ratio", "1:1"))
+	if size := openAICompatibleImageSizeForRatio(ratio); size != "" {
+		return size
+	}
+	if size := openAICompatibleImageSizeForCanvas(fallback); size != "" {
+		return size
+	}
+	return "1024x1024"
+}
+
+func isOpenAICompatibleImageSize(size string) bool {
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "auto", "256x256", "512x512", "1024x1024", "1536x1024", "1024x1536", "1792x1024", "1024x1792":
+		return true
+	default:
+		return false
+	}
+}
+
+func openAICompatibleImageSizeForCanvas(size string) string {
+	w, h := parseSize(size)
+	if w <= 0 || h <= 0 {
+		return ""
+	}
+	if w == h {
+		return "1024x1024"
+	}
+	if w > h {
+		return "1792x1024"
+	}
+	return "1024x1792"
+}
+
+func openAICompatibleImageSizeForRatio(ratio string) string {
+	ratio = strings.ReplaceAll(strings.TrimSpace(ratio), " ", "")
+	switch ratio {
+	case "", "auto", "1:1":
+		return "1024x1024"
+	case "16:9", "4:3", "3:2", "5:4", "21:9":
+		return "1792x1024"
+	case "9:16", "3:4", "2:3", "4:5":
+		return "1024x1792"
+	}
+	parts := strings.Split(ratio, ":")
+	if len(parts) != 2 {
+		return ""
+	}
+	w, werr := strconv.ParseFloat(parts[0], 64)
+	h, herr := strconv.ParseFloat(parts[1], 64)
+	if werr != nil || herr != nil || w <= 0 || h <= 0 {
+		return ""
+	}
+	if w == h {
+		return "1024x1024"
+	}
+	if w > h {
+		return "1792x1024"
+	}
+	return "1024x1792"
+}
+
+var aspectRatioPromptPrefixRe = regexp.MustCompile(`(?i)^\s*make\s+the\s+aspect\s+ratio\s+\S+\s*,?\s*`)
+
+func promptWithAspectRatioHint(prompt, ratio string) string {
+	ratio = strings.ReplaceAll(strings.TrimSpace(ratio), " ", "")
+	if ratio == "" || ratio == "auto" {
+		return prompt
+	}
+	prefix := "Make the aspect ratio " + ratio + ", "
+	if aspectRatioPromptPrefixRe.MatchString(prompt) {
+		return aspectRatioPromptPrefixRe.ReplaceAllString(prompt, prefix)
+	}
+	return prefix + prompt
 }
 
 func pic2APIImageSize(params map[string]any, fallback string) string {
@@ -2732,6 +2848,24 @@ func imagesAPIQuality(params map[string]any) string {
 		return "standard"
 	case "high":
 		return ""
+	}
+	return ""
+}
+
+func openAICompatibleImagesAPIQuality(params map[string]any) string {
+	quality := strings.ToLower(strings.TrimSpace(strParam(params, "quality", "")))
+	switch quality {
+	case "standard", "1k", "draft", "low":
+		return "standard"
+	case "hd", "2k", "4k", "ultra":
+		return "hd"
+	}
+	tier := strings.ToUpper(strings.TrimSpace(strParam(params, "resolution", strParam(params, "size_tier", ""))))
+	switch tier {
+	case "1", "1K":
+		return "standard"
+	case "2K", "4K":
+		return "hd"
 	}
 	return ""
 }

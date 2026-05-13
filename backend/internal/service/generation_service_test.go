@@ -20,3 +20,24 @@ func TestProviderCooldownRetryable429StillCooldowns(t *testing.T) {
 		t.Fatalf("expected 429 cooldown >= 30m, got %s", got)
 	}
 }
+
+func TestRetryableProviderErrorCoversImageChannelFailover(t *testing.T) {
+	cases := []error{
+		errors.New(`provider call: gpt image2 images api 403: {"error":{"message":"Image generation is not enabled for this account"}}`),
+		errors.New(`provider call: gpt image2 images api 502: <!DOCTYPE html><html class="no-js">`),
+		errors.New(`provider call: gpt image2 nova 404: 404 page not found`),
+		errors.New(`provider call: gpt image2 images api 400: {"error":{"message":"Unsupported size"}}`),
+	}
+	for _, err := range cases {
+		if !retryableProviderError(err) {
+			t.Fatalf("expected %q to be retryable", err.Error())
+		}
+	}
+}
+
+func TestRetryableProviderErrorDoesNotRetryBrokenReferenceImage(t *testing.T) {
+	err := errors.New(`provider call: gpt image2 images edits reference 1: reference image download 404: not found`)
+	if retryableProviderError(err) {
+		t.Fatalf("reference image download failure should not be retried across providers")
+	}
+}

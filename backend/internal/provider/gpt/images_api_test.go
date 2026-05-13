@@ -106,6 +106,29 @@ func TestPic2APIImageSizeUsesV1CompatibleDimensions(t *testing.T) {
 	}
 }
 
+func TestOpenAIImagesAPIUsesCompatibleCanvases(t *testing.T) {
+	req := (&providerRequestForTest{BaseURL: "https://newapi.example.com/v1", Name: "galaxy"}).toProviderRequest()
+	cases := []struct {
+		name   string
+		params map[string]any
+		want   string
+	}{
+		{name: "portrait ratio uses v1 compatible canvas", params: map[string]any{"ratio": "9:16", "resolution": "1K"}, want: "1024x1792"},
+		{name: "landscape ratio uses v1 compatible canvas", params: map[string]any{"ratio": "16:9", "resolution": "1K"}, want: "1792x1024"},
+		{name: "square ratio uses square canvas", params: map[string]any{"ratio": "1:1", "resolution": "4K"}, want: "1024x1024"},
+		{name: "custom portrait size is coerced", params: map[string]any{"size": "720x1280"}, want: "1024x1792"},
+		{name: "known openai size is preserved", params: map[string]any{"size": "1024x1536"}, want: "1024x1536"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req.Params = tc.params
+			if got := imagesAPIRequestSize(req); got != tc.want {
+				t.Fatalf("imagesAPIRequestSize() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestImageGenerationEndpointAvoidsDuplicateV1(t *testing.T) {
 	cases := []struct {
 		base string
@@ -145,6 +168,40 @@ func TestResponseEndpointAvoidsDuplicateV1(t *testing.T) {
 				t.Fatalf("responseEndpoint() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestOpenAIImagesAPIQualityAvoidsUnsupported4K(t *testing.T) {
+	req := (&providerRequestForTest{BaseURL: "https://newapi.example.com/v1", Name: "galaxy"}).toProviderRequest()
+	cases := []struct {
+		name   string
+		params map[string]any
+		want   string
+	}{
+		{name: "frontend high 1k", params: map[string]any{"quality": "high", "resolution": "1K"}, want: "standard"},
+		{name: "frontend high 4k", params: map[string]any{"quality": "high", "resolution": "4K"}, want: "hd"},
+		{name: "explicit ultra coerces to hd", params: map[string]any{"quality": "ultra"}, want: "hd"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req.Params = tc.params
+			if got := imagesAPIRequestQuality(req); got != tc.want {
+				t.Fatalf("imagesAPIRequestQuality() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOpenAIImagesAPIPromptKeepsRatioHint(t *testing.T) {
+	req := (&providerRequestForTest{BaseURL: "https://newapi.example.com/v1", Name: "galaxy"}).toProviderRequest()
+	req.Prompt = "一张极简产品广告海报"
+	req.Params = map[string]any{"ratio": "9:16"}
+	if got, want := imagesAPIRequestPrompt(req), "Make the aspect ratio 9:16, 一张极简产品广告海报"; got != want {
+		t.Fatalf("imagesAPIRequestPrompt() = %q, want %q", got, want)
+	}
+	req.Prompt = "Make the aspect ratio 1:1, 一张极简产品广告海报"
+	if got, want := imagesAPIRequestPrompt(req), "Make the aspect ratio 9:16, 一张极简产品广告海报"; got != want {
+		t.Fatalf("imagesAPIRequestPrompt() = %q, want %q", got, want)
 	}
 }
 

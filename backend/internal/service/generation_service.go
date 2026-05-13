@@ -1412,6 +1412,7 @@ func retryableProviderError(err error) bool {
 		isUsageLimitReachedError(err) ||
 		strings.Contains(msg, "http 429") ||
 		strings.Contains(msg, "too many requests") ||
+		isRetryableImageProviderError(msg) ||
 		isGrokRetryableForbiddenError(msg)
 }
 
@@ -1444,8 +1445,74 @@ func isUsageLimitReachedError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "usage_limit_reached") ||
 		strings.Contains(msg, "the usage limit has been reached") ||
+		strings.Contains(msg, "insufficient_quota") ||
+		strings.Contains(msg, "quota exceeded") ||
+		strings.Contains(msg, "exceeded your current quota") ||
 		strings.Contains(msg, "\"plan_type\":\"free\"") ||
 		strings.Contains(msg, "\"plan_type\": \"free\"")
+}
+
+func isRetryableImageProviderError(msg string) bool {
+	if msg == "" {
+		return false
+	}
+	if strings.Contains(msg, "reference image download") {
+		return false
+	}
+	if strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "client timeout") ||
+		strings.Contains(msg, "timeout awaiting response") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "temporary failure") ||
+		strings.Contains(msg, "eof") {
+		return true
+	}
+	if containsProviderStatus(msg, 500) ||
+		containsProviderStatus(msg, 502) ||
+		containsProviderStatus(msg, 503) ||
+		containsProviderStatus(msg, 504) {
+		return true
+	}
+	if strings.Contains(msg, "<!doctype html") ||
+		strings.Contains(msg, "no healthy upstream") ||
+		strings.Contains(msg, "bad gateway") ||
+		strings.Contains(msg, "service unavailable") ||
+		strings.Contains(msg, "gateway timeout") ||
+		strings.Contains(msg, "returned 0 image") {
+		return true
+	}
+	if strings.Contains(msg, "image generation is not enabled") ||
+		strings.Contains(msg, "current api key does not allow image generation") ||
+		strings.Contains(msg, "does not support image generation") ||
+		strings.Contains(msg, "permission denied") ||
+		strings.Contains(msg, "invalid api key") ||
+		strings.Contains(msg, "invalid_api_key") ||
+		strings.Contains(msg, "unauthorized") ||
+		strings.Contains(msg, "incorrect api key") {
+		return true
+	}
+	if strings.Contains(msg, "gpt image2 nova 404") ||
+		strings.Contains(msg, "gpt image2 images api 404") ||
+		strings.Contains(msg, "gpt image2 images edits 404") ||
+		strings.Contains(msg, "model_not_found") ||
+		strings.Contains(msg, "model not found") ||
+		strings.Contains(msg, "unsupported model") {
+		return true
+	}
+	return strings.Contains(msg, "unsupported size") ||
+		strings.Contains(msg, "invalid size") ||
+		strings.Contains(msg, "invalid value for 'size'") ||
+		strings.Contains(msg, "unsupported quality") ||
+		strings.Contains(msg, "invalid quality")
+}
+
+func containsProviderStatus(msg string, status int) bool {
+	code := strconv.Itoa(status)
+	return strings.Contains(msg, "http "+code) ||
+		strings.Contains(msg, " "+code+":") ||
+		strings.Contains(msg, " "+code+" ") ||
+		strings.Contains(msg, "status "+code)
 }
 
 func usageLimitResetAt(err error) time.Time {
