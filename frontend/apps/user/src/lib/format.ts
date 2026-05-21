@@ -41,10 +41,12 @@ const BIZ_LABEL: Record<string, string> = {
   cdk: 'CDK 兑换',
   promo: '优惠码',
   invite: '邀请奖励',
+  invite_reward: '邀请奖励',
   refund: '失败退回',
   consume: '消费',
   freeze: '创作预扣',
   unfreeze: '预扣退回',
+  gift: '注册赠送',
   grant: '系统赠点',
   admin_adjust: '人工调整',
 };

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ReceiptText, RefreshCw, Save, Sparkles } from 'lucide-react';
+import { ReceiptText, RefreshCw, Save, Sparkles, Users } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { ApiError } from '../../lib/api';
@@ -10,11 +10,21 @@ import { toast } from '../../stores/toast';
 interface FormState {
   refund_on_failure: boolean;
   free_initial_points: number;
+  invite_enabled: boolean;
+  invite_new_user_points: number;
+  invite_inviter_register_reward: number;
+  invite_first_recharge_reward: number;
+  invite_lifetime_share_pct: number;
 }
 
 const DEFAULT_FORM: FormState = {
   refund_on_failure: true,
   free_initial_points: 0,
+  invite_enabled: false,
+  invite_new_user_points: 0,
+  invite_inviter_register_reward: 0,
+  invite_first_recharge_reward: 50,
+  invite_lifetime_share_pct: 5,
 };
 
 const asBool = (v: unknown, fallback = false) => (v == null ? fallback : Boolean(v));
@@ -28,6 +38,11 @@ function fromSettings(s?: SystemSettings): FormState {
   return {
     refund_on_failure: asBool(s['billing.refund_on_failure'], true),
     free_initial_points: asNum(s['billing.free_initial_points'], 0) / 100,
+    invite_enabled: asBool(s['invite.enabled'], false),
+    invite_new_user_points: asNum(s['invite.new_user_points'], 0) / 100,
+    invite_inviter_register_reward: asNum(s['invite.inviter_register_reward'], 0) / 100,
+    invite_first_recharge_reward: asNum(s['invite.first_recharge_reward'], 5000) / 100,
+    invite_lifetime_share_pct: asNum(s['invite.lifetime_share_pct'], 5),
   };
 }
 
@@ -35,6 +50,11 @@ function toPayload(form: FormState): Partial<SystemSettings> {
   return {
     'billing.refund_on_failure': form.refund_on_failure,
     'billing.free_initial_points': Math.round((Number(form.free_initial_points) || 0) * 100),
+    'invite.enabled': form.invite_enabled,
+    'invite.new_user_points': Math.round((Number(form.invite_new_user_points) || 0) * 100),
+    'invite.inviter_register_reward': Math.round((Number(form.invite_inviter_register_reward) || 0) * 100),
+    'invite.first_recharge_reward': Math.round((Number(form.invite_first_recharge_reward) || 0) * 100),
+    'invite.lifetime_share_pct': Math.max(0, Math.min(100, Math.round(Number(form.invite_lifetime_share_pct) || 0))),
   };
 }
 
@@ -114,6 +134,43 @@ export default function BillingSettingsPage() {
               保存后会以系统内部积分单位入库，页面填写仍然按“点”显示。
             </div>
           </section>
+
+          <section className="card card-section space-y-5 lg:col-span-2">
+            <SectionTitle icon={<Users size={18} />} title="邀请奖励" desc="按邀请码绑定关系，控制注册奖励、好友首充奖励和长期充值分润。" />
+            <div className="rounded-md border border-border bg-surface-2 p-4 flex items-center justify-between gap-4">
+              <div>
+                <div className="text-base font-semibold text-text-primary">启用邀请奖励</div>
+                <div className="text-small text-text-tertiary mt-1">关闭时仍会绑定邀请关系，但不会自动发放邀请奖励。</div>
+              </div>
+              <Switch checked={form.invite_enabled} onChange={(v) => set('invite_enabled', v)} />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <NumberField
+                label="被邀请人注册赠点"
+                value={form.invite_new_user_points}
+                onChange={(v) => set('invite_new_user_points', v)}
+              />
+              <NumberField
+                label="邀请人注册奖励"
+                value={form.invite_inviter_register_reward}
+                onChange={(v) => set('invite_inviter_register_reward', v)}
+              />
+              <NumberField
+                label="好友首充固定奖励"
+                value={form.invite_first_recharge_reward}
+                onChange={(v) => set('invite_first_recharge_reward', v)}
+              />
+              <NumberField
+                label="好友充值分润比例 %"
+                value={form.invite_lifetime_share_pct}
+                max={100}
+                onChange={(v) => set('invite_lifetime_share_pct', v)}
+              />
+            </div>
+            <div className="rounded-md border border-border bg-surface-2 p-3 text-small text-text-tertiary">
+              首充奖励只在好友第一笔充值成功时发放一次；分润按实际到账点数乘以比例取整，所有奖励都会写入钱包流水。
+            </div>
+          </section>
         </div>
       )}
     </div>
@@ -129,6 +186,22 @@ function SectionTitle({ icon, title, desc }: { icon: ReactNode; title: string; d
         <p className="text-small text-text-tertiary mt-0.5">{desc}</p>
       </div>
     </header>
+  );
+}
+
+function NumberField({ label, value, max, onChange }: { label: string; value: number; max?: number; onChange: (v: number) => void }) {
+  return (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      <input
+        className="input text-[22px] font-semibold tabular-nums"
+        type="number"
+        min={0}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value) || 0)}
+      />
+    </label>
   );
 }
 

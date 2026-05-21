@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { CheckCircle2, Copy, Gift, QrCode, RefreshCw, Sparkles, Wallet, X } from 'lucide-react';
 import clsx from 'clsx';
@@ -138,6 +139,10 @@ export default function BillingPage() {
           <h1 className="page-title">余额明细</h1>
           <p className="page-subtitle">点数变动、兑换码、支付宝充值都在这里管理。</p>
         </div>
+        <Link className="btn btn-outline btn-md" to="/invite">
+          <Gift size={16} />
+          生成邀请海报
+        </Link>
       </header>
 
       <div className="stat-grid mb-6">

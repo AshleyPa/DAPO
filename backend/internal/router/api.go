@@ -43,13 +43,14 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 
 	sysCfgSvc := service.NewSystemConfigService(sysCfgRepo)
 	emailVerifier := service.NewEmailVerificationService(emailCodeRepo, userRepo, deps.Cfg.SMTP, sysCfgSvc)
-	authSvc := service.NewAuthService(deps.DB, userRepo, deps.JWT, emailVerifier)
+	inviteSvc := service.NewInviteRewardService(deps.DB, walletRepo, sysCfgSvc)
+	authSvc := service.NewAuthService(deps.DB, userRepo, deps.JWT, emailVerifier, inviteSvc)
 	humanSvc := service.NewHumanVerificationService(deps.Cfg, sysCfgSvc)
 	userSvc := service.NewUserService(userRepo)
 	keySvc := service.NewAPIKeyService(apiKeyRepo)
 	billingSvc := service.NewBillingService(deps.DB, walletRepo)
 	cdkSvc := service.NewCDKService(deps.DB, billingSvc)
-	rechargeSvc := service.NewRechargeService(deps.DB, rechargeRepo, sysCfgSvc)
+	rechargeSvc := service.NewRechargeService(deps.DB, rechargeRepo, sysCfgSvc, inviteSvc)
 	proxySvc := service.NewProxyService(proxyRepo, deps.AES)
 	promptGallerySvc := service.NewPromptGalleryService(promptGalleryRepo)
 	routeSvc := service.NewProviderRouteService(sysCfgSvc)
@@ -61,7 +62,7 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 
 	authH := handler.NewAuthHandler(authSvc, userSvc, humanSvc)
 	keyH := handler.NewAPIKeyHandler(keySvc)
-	billH := handler.NewBillingHandler(billingSvc, cdkSvc, rechargeSvc)
+	billH := handler.NewBillingHandler(billingSvc, cdkSvc, rechargeSvc, inviteSvc)
 	genH := handler.NewGenerationHandler(genSvc, chatSvc, genRepo, accountRepo, sysCfgSvc, deps.AES)
 	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc, sysCfgSvc)
 
@@ -111,6 +112,7 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 		bill := authed.Group("/billing")
 		{
 			bill.GET("/logs", billH.Logs)
+			bill.GET("/invite/rules", billH.InviteRules)
 			bill.POST("/cdk/redeem", billH.RedeemCDK)
 			bill.GET("/recharge/packages", billH.RechargePackages)
 			bill.GET("/recharge/orders", billH.RechargeOrders)

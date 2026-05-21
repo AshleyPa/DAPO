@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -199,6 +200,8 @@ function LoginForm({ onDone }: { onDone: () => void }) {
 }
 
 function RegisterForm({ onDone }: { onDone: () => void }) {
+  const [searchParams] = useSearchParams();
+  const inviteFromUrl = (searchParams.get('invite') || searchParams.get('invite_code') || '').trim().toUpperCase();
   const setToken = useAuthStore((s) => s.setToken);
   const refreshMe = useAuthStore((s) => s.refreshMe);
   const human = useHumanVerification('auth');
@@ -207,11 +210,12 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
     register,
     handleSubmit,
     getValues,
+    setValue,
     watch,
     formState: { errors, isSubmitting },
   } = useForm<RegisterValues>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { account: '', code: '', password: '', confirm: '', invite_code: '' },
+    defaultValues: { account: '', code: '', password: '', confirm: '', invite_code: inviteFromUrl },
   });
   const [sendingCode, setSendingCode] = useState(false);
   const [cooldown, setCooldown] = useState(0);
@@ -222,6 +226,12 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
     const t = window.setTimeout(() => setCooldown((v) => Math.max(0, v - 1)), 1000);
     return () => window.clearTimeout(t);
   }, [cooldown]);
+
+  useEffect(() => {
+    if (inviteFromUrl) {
+      setValue('invite_code', inviteFromUrl, { shouldDirty: true });
+    }
+  }, [inviteFromUrl, setValue]);
 
   const sendCode = async () => {
     const email = getValues('account').trim();
@@ -323,6 +333,7 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
       </div>
       <div className="field">
         <input className="input h-14 rounded-2xl text-[15px] font-normal placeholder:font-normal" placeholder="邀请码（选填）" {...register('invite_code')} />
+        {inviteFromUrl && <p className="field-hint">已从邀请链接自动填入。</p>}
       </div>
       {human.element}
       <button className="btn btn-primary btn-lg btn-block h-14 text-[17px]" type="submit" disabled={isSubmitting || human.isLoading || !human.isSatisfied}>

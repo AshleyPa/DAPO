@@ -214,6 +214,15 @@ export interface RedeemCDKResp {
   message: string;
 }
 
+export interface InviteRules {
+  enabled: boolean;
+  free_initial_points: number;
+  invitee_register_points: number;
+  inviter_register_reward: number;
+  first_recharge_reward: number;
+  lifetime_share_pct: number;
+}
+
 export interface MessageResp {
   message: string;
 }

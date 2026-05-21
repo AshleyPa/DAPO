@@ -19,11 +19,12 @@ type BillingHandler struct {
 	billing  *service.BillingService
 	cdk      *service.CDKService
 	recharge *service.RechargeService
+	invite   *service.InviteRewardService
 }
 
 // NewBillingHandler 构造。
-func NewBillingHandler(b *service.BillingService, cdk *service.CDKService, recharge *service.RechargeService) *BillingHandler {
-	return &BillingHandler{billing: b, cdk: cdk, recharge: recharge}
+func NewBillingHandler(b *service.BillingService, cdk *service.CDKService, recharge *service.RechargeService, invite *service.InviteRewardService) *BillingHandler {
+	return &BillingHandler{billing: b, cdk: cdk, recharge: recharge, invite: invite}
 }
 
 // Logs GET /api/v1/billing/logs?page=&page_size=
@@ -54,6 +55,11 @@ func (h *BillingHandler) Logs(c *gin.Context) {
 		out = append(out, r)
 	}
 	response.Page(c, out, total, page, pageSize)
+}
+
+// InviteRules GET /api/v1/billing/invite/rules
+func (h *BillingHandler) InviteRules(c *gin.Context) {
+	response.OK(c, h.invite.PublicRules(c.Request.Context()))
 }
 
 // RedeemCDK POST /api/v1/billing/cdk/redeem

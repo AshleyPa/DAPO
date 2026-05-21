@@ -8,9 +8,9 @@ const (
 	PromoStatusEnabled  = 1
 	PromoStatusDisabled = 0
 
-	CDKStatusUnused   = 0
-	CDKStatusUsed     = 1
-	CDKStatusInvalid  = 2
+	CDKStatusUnused  = 0
+	CDKStatusUsed    = 1
+	CDKStatusInvalid = 2
 )
 
 // 优惠码折扣类型。
@@ -22,22 +22,22 @@ const (
 
 // PromoCode 优惠码。
 type PromoCode struct {
-	ID            uint64    `gorm:"primaryKey;column:id" json:"id"`
-	Code          string    `gorm:"column:code;size:32;not null;uniqueIndex" json:"code"`
-	Name          string    `gorm:"column:name;size:64;not null" json:"name"`
-	DiscountType  int8      `gorm:"column:discount_type;not null" json:"discount_type"`
-	DiscountVal   int64     `gorm:"column:discount_val;not null" json:"discount_val"`
-	MinAmount     int64     `gorm:"column:min_amount;not null;default:0" json:"min_amount"`
-	ApplyTo       string    `gorm:"column:apply_to;size:64;not null;default:all" json:"apply_to"`
-	TotalQty      int       `gorm:"column:total_qty;not null;default:0" json:"total_qty"`
-	UsedQty       int       `gorm:"column:used_qty;not null;default:0" json:"used_qty"`
-	PerUserLimit  int       `gorm:"column:per_user_limit;not null;default:1" json:"per_user_limit"`
-	StartAt       time.Time `gorm:"column:start_at;not null" json:"start_at"`
-	EndAt         time.Time `gorm:"column:end_at;not null" json:"end_at"`
-	Status        int8      `gorm:"column:status;not null;default:1" json:"status"`
-	CreatedBy     *uint64   `gorm:"column:created_by" json:"created_by,omitempty"`
-	CreatedAt     time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
-	UpdatedAt     time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
+	ID           uint64    `gorm:"primaryKey;column:id" json:"id"`
+	Code         string    `gorm:"column:code;size:32;not null;uniqueIndex" json:"code"`
+	Name         string    `gorm:"column:name;size:64;not null" json:"name"`
+	DiscountType int8      `gorm:"column:discount_type;not null" json:"discount_type"`
+	DiscountVal  int64     `gorm:"column:discount_val;not null" json:"discount_val"`
+	MinAmount    int64     `gorm:"column:min_amount;not null;default:0" json:"min_amount"`
+	ApplyTo      string    `gorm:"column:apply_to;size:64;not null;default:all" json:"apply_to"`
+	TotalQty     int       `gorm:"column:total_qty;not null;default:0" json:"total_qty"`
+	UsedQty      int       `gorm:"column:used_qty;not null;default:0" json:"used_qty"`
+	PerUserLimit int       `gorm:"column:per_user_limit;not null;default:1" json:"per_user_limit"`
+	StartAt      time.Time `gorm:"column:start_at;not null" json:"start_at"`
+	EndAt        time.Time `gorm:"column:end_at;not null" json:"end_at"`
+	Status       int8      `gorm:"column:status;not null;default:1" json:"status"`
+	CreatedBy    *uint64   `gorm:"column:created_by" json:"created_by,omitempty"`
+	CreatedAt    time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
+	UpdatedAt    time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
 }
 
 // TableName 表名。
@@ -64,18 +64,18 @@ func (PromoCodeUse) TableName() string { return "promo_code_use" }
 
 // RedeemCodeBatch CDK 批次。
 type RedeemCodeBatch struct {
-	ID            uint64     `gorm:"primaryKey;column:id" json:"id"`
-	BatchNo       string     `gorm:"column:batch_no;size:32;not null;uniqueIndex" json:"batch_no"`
-	Name          string     `gorm:"column:name;size:64;not null" json:"name"`
-	RewardType    string     `gorm:"column:reward_type;size:32;not null" json:"reward_type"`
-	RewardValue   string     `gorm:"column:reward_value;type:json;not null" json:"reward_value"`
-	TotalQty      int        `gorm:"column:total_qty;not null" json:"total_qty"`
-	UsedQty       int        `gorm:"column:used_qty;not null;default:0" json:"used_qty"`
-	PerUserLimit  int        `gorm:"column:per_user_limit;not null;default:1" json:"per_user_limit"`
-	ExpireAt      *time.Time `gorm:"column:expire_at" json:"expire_at,omitempty"`
-	Status        int8       `gorm:"column:status;not null;default:1" json:"status"`
-	CreatedBy     *uint64    `gorm:"column:created_by" json:"created_by,omitempty"`
-	CreatedAt     time.Time  `gorm:"column:created_at;autoCreateTime" json:"created_at"`
+	ID           uint64     `gorm:"primaryKey;column:id" json:"id"`
+	BatchNo      string     `gorm:"column:batch_no;size:32;not null;uniqueIndex" json:"batch_no"`
+	Name         string     `gorm:"column:name;size:64;not null" json:"name"`
+	RewardType   string     `gorm:"column:reward_type;size:32;not null" json:"reward_type"`
+	RewardValue  string     `gorm:"column:reward_value;type:json;not null" json:"reward_value"`
+	TotalQty     int        `gorm:"column:total_qty;not null" json:"total_qty"`
+	UsedQty      int        `gorm:"column:used_qty;not null;default:0" json:"used_qty"`
+	PerUserLimit int        `gorm:"column:per_user_limit;not null;default:1" json:"per_user_limit"`
+	ExpireAt     *time.Time `gorm:"column:expire_at" json:"expire_at,omitempty"`
+	Status       int8       `gorm:"column:status;not null;default:1" json:"status"`
+	CreatedBy    *uint64    `gorm:"column:created_by" json:"created_by,omitempty"`
+	CreatedAt    time.Time  `gorm:"column:created_at;autoCreateTime" json:"created_at"`
 }
 
 // TableName 表名。
@@ -94,3 +94,17 @@ type RedeemCode struct {
 
 // TableName 表名。
 func (RedeemCode) TableName() string { return "redeem_code" }
+
+// InvitationReward 邀请奖励明细。
+type InvitationReward struct {
+	ID        uint64    `gorm:"primaryKey;column:id" json:"id"`
+	InviterID uint64    `gorm:"column:inviter_id;not null;index:idx_inviter_created,priority:1" json:"inviter_id"`
+	InviteeID uint64    `gorm:"column:invitee_id;not null;index:idx_invitee" json:"invitee_id"`
+	Kind      string    `gorm:"column:kind;size:32;not null" json:"kind"`
+	Points    int64     `gorm:"column:points;not null" json:"points"`
+	FromOrder *string   `gorm:"column:from_order;size:32" json:"from_order,omitempty"`
+	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime;index:idx_inviter_created,priority:2" json:"created_at"`
+}
+
+// TableName 表名。
+func (InvitationReward) TableName() string { return "invitation_reward" }

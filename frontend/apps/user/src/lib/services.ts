@@ -9,6 +9,7 @@ import type {
   CreateVideoBody,
   GenerationTask,
   HumanVerificationConfig,
+  InviteRules,
   LoginResp,
   MeResp,
   MessageResp,
@@ -92,6 +93,7 @@ export const billingApi = {
       url: '/billing/logs',
       params: { page, page_size: pageSize },
     }),
+  inviteRules: () => request<InviteRules>({ method: 'GET', url: '/billing/invite/rules' }),
   redeemCDK: (code: string, idemKey = clientIdemKey()) =>
     request<RedeemCDKResp>({
       method: 'POST',

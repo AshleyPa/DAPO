@@ -50,11 +50,13 @@ func main() {
 
 	if deps.DB != nil {
 		sysCfgSvc := service.NewSystemConfigService(repo.NewSystemConfigRepo(deps.DB))
+		walletRepo := repo.NewWalletRepo(deps.DB)
 		proxyRepo := repo.NewProxyRepo(deps.DB)
 		proxySvc := service.NewProxyService(proxyRepo, deps.AES)
 		service.NewGrokCFRefreshService(sysCfgSvc, proxySvc).Start(ctx)
 		service.NewProxySubscriptionService(proxyRepo, deps.AES, service.NewMihomoManagerFromEnv()).StartAutoSync(ctx)
-		rechargeSvc := service.NewRechargeService(deps.DB, repo.NewRechargeRepo(deps.DB), sysCfgSvc)
+		inviteSvc := service.NewInviteRewardService(deps.DB, walletRepo, sysCfgSvc)
+		rechargeSvc := service.NewRechargeService(deps.DB, repo.NewRechargeRepo(deps.DB), sysCfgSvc, inviteSvc)
 		rechargeSvc.StartAlipayReconcileLoop(ctx,
 			envDuration("KLEIN_ALIPAY_RECONCILE_INTERVAL", 2*time.Minute),
 			envInt("KLEIN_ALIPAY_RECONCILE_LIMIT", 100),

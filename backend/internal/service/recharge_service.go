@@ -41,9 +41,10 @@ const (
 )
 
 type RechargeService struct {
-	db   *gorm.DB
-	repo *repo.RechargeRepo
-	sys  *SystemConfigService
+	db     *gorm.DB
+	repo   *repo.RechargeRepo
+	sys    *SystemConfigService
+	invite *InviteRewardService
 }
 
 type RechargeReconcileStats struct {
@@ -66,8 +67,8 @@ type rechargePackage struct {
 	Remark      string  `json:"remark"`
 }
 
-func NewRechargeService(db *gorm.DB, rechargeRepo *repo.RechargeRepo, sys *SystemConfigService) *RechargeService {
-	return &RechargeService{db: db, repo: rechargeRepo, sys: sys}
+func NewRechargeService(db *gorm.DB, rechargeRepo *repo.RechargeRepo, sys *SystemConfigService, invite *InviteRewardService) *RechargeService {
+	return &RechargeService{db: db, repo: rechargeRepo, sys: sys, invite: invite}
 }
 
 func (s *RechargeService) ListPackages(ctx context.Context) ([]dto.RechargePackageResp, error) {
@@ -482,7 +483,13 @@ func (s *RechargeService) settleAlipay(ctx context.Context, pl *alipay.NotifyPay
 			PointsAfter:  after,
 			Remark:       &remark,
 		}
-		return tx.Create(log).Error
+		if err := tx.Create(log).Error; err != nil {
+			return err
+		}
+		if err := s.invite.GrantRechargeRewardsTx(ctx, tx, &order, &u, credit); err != nil {
+			return err
+		}
+		return nil
 	})
 }
 

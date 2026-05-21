@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -33,6 +33,8 @@ type FormValues = z.infer<typeof schema>;
 
 export default function RegisterPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const inviteFromUrl = (searchParams.get('invite') || searchParams.get('invite_code') || '').trim().toUpperCase();
   const setToken = useAuthStore((s) => s.setToken);
   const refreshMe = useAuthStore((s) => s.refreshMe);
   const human = useHumanVerification('auth');
@@ -41,11 +43,12 @@ export default function RegisterPage() {
     register,
     handleSubmit,
     getValues,
+    setValue,
     watch,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { account: '', code: '', password: '', confirm: '', invite_code: '' },
+    defaultValues: { account: '', code: '', password: '', confirm: '', invite_code: inviteFromUrl },
   });
   const [sendingCode, setSendingCode] = useState(false);
   const [cooldown, setCooldown] = useState(0);
@@ -56,6 +59,12 @@ export default function RegisterPage() {
     const t = window.setTimeout(() => setCooldown((v) => Math.max(0, v - 1)), 1000);
     return () => window.clearTimeout(t);
   }, [cooldown]);
+
+  useEffect(() => {
+    if (inviteFromUrl) {
+      setValue('invite_code', inviteFromUrl, { shouldDirty: true });
+    }
+  }, [inviteFromUrl, setValue]);
 
   const sendCode = async () => {
     const email = getValues('account').trim();
@@ -171,7 +180,7 @@ export default function RegisterPage() {
         <div className="field">
           <label className="field-label">邀请码（选填）</label>
           <input className="input" placeholder="填写以获得额外点数" {...register('invite_code')} />
-          <p className="field-hint">使用邀请码注册可获得额外赠点。</p>
+          <p className="field-hint">{inviteFromUrl ? '已从邀请链接自动填入，可直接注册。' : '使用邀请码注册可获得额外赠点。'}</p>
         </div>
 
         <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={isSubmitting || human.isLoading || !human.isSatisfied}>

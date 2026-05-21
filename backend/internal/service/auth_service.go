@@ -27,11 +27,12 @@ type AuthService struct {
 	user     *repo.UserRepo
 	jwt      *jwtx.Manager
 	verifier *EmailVerificationService
+	invite   *InviteRewardService
 }
 
 // NewAuthService 构造。
-func NewAuthService(db *gorm.DB, userRepo *repo.UserRepo, jwt *jwtx.Manager, verifier *EmailVerificationService) *AuthService {
-	return &AuthService{db: db, user: userRepo, jwt: jwt, verifier: verifier}
+func NewAuthService(db *gorm.DB, userRepo *repo.UserRepo, jwt *jwtx.Manager, verifier *EmailVerificationService, invite *InviteRewardService) *AuthService {
+	return &AuthService{db: db, user: userRepo, jwt: jwt, verifier: verifier, invite: invite}
 }
 
 var (
@@ -89,6 +90,9 @@ func (s *AuthService) Register(ctx context.Context, req *dto.RegisterReq, ip str
 			).Error; err != nil {
 				return err
 			}
+		}
+		if err := s.invite.GrantRegistrationBonusesTx(ctx, tx, user.ID, user.InviterID); err != nil {
+			return err
 		}
 		return nil
 	})
