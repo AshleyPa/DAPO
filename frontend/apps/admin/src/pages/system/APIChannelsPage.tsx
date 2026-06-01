@@ -244,7 +244,7 @@ export default function APIChannelsPage() {
         </select>
       </div>
 
-      <div className="card table-wrap">
+      <div className="card table-wrap overflow-x-auto">
         <table className="data-table min-w-[1240px]">
           <thead>
             <tr>
@@ -289,9 +289,9 @@ export default function APIChannelsPage() {
                   </td>
                   <td><ChannelHealth item={item} /></td>
                   <td>
-                    <button className={item.status === 1 ? 'btn btn-outline btn-sm' : 'btn btn-ghost btn-sm'} onClick={() => setEditing(item)}>
+                    <span className={item.status === 1 ? 'badge badge-success' : 'badge badge-outline'}>
                       {item.status === 1 ? '启用' : '停用'}
-                    </button>
+                    </span>
                   </td>
                   <td>
                     <div className="flex gap-2">

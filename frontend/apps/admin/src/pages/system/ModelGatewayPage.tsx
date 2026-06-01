@@ -413,9 +413,9 @@ export default function ModelGatewayPage() {
         onRefresh={() => conflicts.refetch()}
       />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(420px,0.75fr)]">
-        <div className="card table-wrap">
-          <table className="data-table min-w-[980px]">
+      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="card table-wrap min-w-0 overflow-x-auto">
+          <table className="data-table min-w-[860px]">
             <thead>
               <tr>
                 <th>模型</th>
@@ -437,7 +437,7 @@ export default function ModelGatewayPage() {
                 <tr key={item.id} className={selected?.id === item.id ? 'bg-surface-2/70' : ''}>
                   <td>
                     <button className="text-left" onClick={() => setSelected(item)}>
-                      <div className="font-semibold text-text-primary">{item.display_name}</div>
+                      <div className="font-semibold text-text-primary">{catalogDisplayName(item)}</div>
                       <div className="mt-1 font-mono text-tiny text-text-tertiary">{item.model_code}</div>
                     </button>
                   </td>
@@ -456,7 +456,7 @@ export default function ModelGatewayPage() {
                       <button
                         className="btn btn-danger-ghost btn-icon btn-sm"
                         onClick={() => {
-                          if (window.confirm(`确定删除模型「${item.display_name}」吗？有来源映射时后端会拒绝删除。`)) removeModel.mutate(item.id);
+                          if (window.confirm(`确定删除模型「${catalogDisplayName(item)}」吗？有来源映射时后端会拒绝删除。`)) removeModel.mutate(item.id);
                         }}
                         title="删除模型"
                       >
@@ -470,7 +470,7 @@ export default function ModelGatewayPage() {
           </table>
         </div>
 
-        <div className="card space-y-3 p-4">
+        <div className="card min-w-0 space-y-3 p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
               <h2 className="text-h4 font-semibold text-text-primary">来源映射</h2>
@@ -1225,6 +1225,36 @@ function sourceTypeLabel(sourceType: string) {
   return sourceType === 'api_channel' ? 'API 渠道' : sourceType === 'account_pool' ? '账号池' : sourceType;
 }
 
+const DEFAULT_CATALOG_DISPLAY_NAMES: Record<string, string> = {
+  'gpt-4o-mini': '文字对话',
+  'gpt-image-2': 'GPT Image 2',
+  sora2: 'Sora2 视频',
+  'sora2-pro': 'Sora2 Pro 视频',
+};
+
+const DEFAULT_CATALOG_TAGS: Record<string, string[]> = {
+  'gpt-4o-mini': ['文字', '对话'],
+  'gpt-image-2': ['图片', '海报'],
+  sora2: ['视频'],
+  'sora2-pro': ['视频'],
+};
+
+function catalogDisplayName(item: ModelCatalogItem) {
+  const fallback = DEFAULT_CATALOG_DISPLAY_NAMES[item.model_code];
+  if (fallback && looksLikeMojibake(item.display_name)) return fallback;
+  return item.display_name || item.model_code;
+}
+
+function catalogTags(item: ModelCatalogItem) {
+  const fallback = DEFAULT_CATALOG_TAGS[item.model_code];
+  if (fallback && item.tags.some(looksLikeMojibake)) return fallback;
+  return item.tags;
+}
+
+function looksLikeMojibake(value: string) {
+  return /(?:æ|è|é|å|Ã|Â|�)/.test(value);
+}
+
 function sourceFormWarnings(form: SourceForm, model: ModelCatalogItem | null, channel: APIChannelItem | null) {
   const warnings: string[] = [];
   const entryKind = model?.entry_kind || '';
@@ -1328,7 +1358,7 @@ function modelFormFromItem(item: ModelCatalogItem): ModelForm {
   const pricingMode = normalizePricingModeForKind(item.entry_kind, item.pricing_mode);
   return {
     model_code: item.model_code,
-    display_name: item.display_name,
+    display_name: catalogDisplayName(item),
     entry_kind: item.entry_kind,
     provider_hint: item.provider_hint || '',
     upstream_default_model: item.upstream_default_model || '',
@@ -1340,7 +1370,7 @@ function modelFormFromItem(item: ModelCatalogItem): ModelForm {
     output_unit_points: (item.output_unit_points || 0) / 100,
     price_rules_text: canUsePriceRules(item.entry_kind, pricingMode) && item.price_rules ? JSON.stringify(item.price_rules, null, 2) : '',
     min_plan: item.min_plan || 'free',
-    tags_text: item.tags.join(', '),
+    tags_text: catalogTags(item).join(', '),
     description: item.description || '',
     sort_order: item.sort_order || 0,
     visible: item.visible === 1 ? 1 : 0,
