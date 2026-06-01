@@ -59,6 +59,42 @@ func TestPickProviderRouteOptionsKeepsFallbackOrder(t *testing.T) {
 	}
 }
 
+func TestOrderProviderRoutesForRuntimeWeightedWithinPriority(t *testing.T) {
+	picker := newModelSourceRoutePicker()
+	routes := []ProviderRoute{
+		{SourceType: model.ModelSourceTypeAPIChannel, SourceCode: "slow", Provider: "api_channel", UpstreamModel: "mimo-v2.5-pro", Strategy: "weighted_rr", Priority: 10, Weight: 3},
+		{SourceType: model.ModelSourceTypeAPIChannel, SourceCode: "burst", Provider: "api_channel", UpstreamModel: "mimo-v2.5-pro", Strategy: "weighted_rr", Priority: 10, Weight: 1},
+		{SourceType: model.ModelSourceTypeAccountPool, SourceCode: "gpt", Provider: "gpt", UpstreamModel: "gpt-4o-mini", Strategy: "weighted_rr", Priority: 20, Weight: 100},
+	}
+	first := orderProviderRoutesForRuntimeWithPicker(picker, "mimo-v2.5-pro", "chat", routes)
+	second := orderProviderRoutesForRuntimeWithPicker(picker, "mimo-v2.5-pro", "chat", routes)
+	third := orderProviderRoutesForRuntimeWithPicker(picker, "mimo-v2.5-pro", "chat", routes)
+	if first[0].SourceCode != "slow" || second[0].SourceCode != "burst" || third[0].SourceCode != "slow" {
+		t.Fatalf("weighted order = %s, %s, %s", first[0].SourceCode, second[0].SourceCode, third[0].SourceCode)
+	}
+	if first[len(first)-1].SourceCode != "gpt" || second[len(second)-1].SourceCode != "gpt" || third[len(third)-1].SourceCode != "gpt" {
+		t.Fatalf("lower-priority route moved ahead: %#v / %#v / %#v", first, second, third)
+	}
+	got := orderProviderRoutesForRuntimeWithPicker(picker, "mimo-v2.5-pro", "chat", routes)
+	if got[0].SourceCode != "slow" || got[1].SourceCode != "burst" || got[2].SourceCode != "gpt" {
+		t.Fatalf("expected fourth weighted call to rotate back to slow then fallback burst/gpt, got %#v", got)
+	}
+}
+
+func TestOrderProviderRoutesForRuntimeRoundRobinIgnoresWeights(t *testing.T) {
+	picker := newModelSourceRoutePicker()
+	routes := []ProviderRoute{
+		{SourceType: model.ModelSourceTypeAPIChannel, SourceCode: "a", Provider: "api_channel", UpstreamModel: "mimo-v2.5-pro", Strategy: "round_robin", Priority: 10, Weight: 100},
+		{SourceType: model.ModelSourceTypeAPIChannel, SourceCode: "b", Provider: "api_channel", UpstreamModel: "mimo-v2.5-pro", Strategy: "round_robin", Priority: 10, Weight: 1},
+	}
+	first := orderProviderRoutesForRuntimeWithPicker(picker, "mimo-v2.5-pro", "chat", routes)
+	second := orderProviderRoutesForRuntimeWithPicker(picker, "mimo-v2.5-pro", "chat", routes)
+	third := orderProviderRoutesForRuntimeWithPicker(picker, "mimo-v2.5-pro", "chat", routes)
+	if first[0].SourceCode != "a" || second[0].SourceCode != "b" || third[0].SourceCode != "a" {
+		t.Fatalf("round-robin order = %s, %s, %s", first[0].SourceCode, second[0].SourceCode, third[0].SourceCode)
+	}
+}
+
 func TestFindProviderRouteRulePrefersSpecificModel(t *testing.T) {
 	rule, ok := findProviderRouteRule([]ProviderRouteRule{
 		{Kind: "text", ModelCode: "*", Routes: []ProviderRouteOption{{Provider: "grok"}}},

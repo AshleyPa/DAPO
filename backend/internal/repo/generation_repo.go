@@ -3,6 +3,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -24,6 +25,20 @@ type AdminGenerationLogFilter struct {
 	PageSize int
 }
 
+type AdminModelGatewayAuditFilter struct {
+	Keyword       string
+	Kind          string
+	ModelCode     string
+	SourceCode    string
+	SkipReason    string
+	PricingSource string
+	Settlement    string
+	AuditType     string
+	Status        *int
+	Page          int
+	PageSize      int
+}
+
 type AdminGenerationLogRow struct {
 	TaskID     string
 	CreatedAt  time.Time
@@ -38,6 +53,7 @@ type AdminGenerationLogRow struct {
 	DurationMs *int64
 	CostPoints int64
 	PreviewURL *string
+	Params     *string
 	Error      *string
 }
 
@@ -237,6 +253,7 @@ WHERE ` + whereSQL
   END AS duration_ms,
   t.cost_points,
   (SELECT COALESCE(r.thumb_url, r.url) FROM generation_result r WHERE r.task_id = t.task_id AND r.deleted_at IS NULL ORDER BY r.seq ASC, r.id ASC LIMIT 1) AS preview_url,
+  t.params,
   t.error
 FROM generation_task t
 LEFT JOIN ` + "`user`" + ` u ON u.id = t.user_id
@@ -249,6 +266,143 @@ LIMIT ?, ?`
 		return nil, 0, err
 	}
 	return rows, total, nil
+}
+
+func (r *GenerationRepo) ListModelGatewayAudit(ctx context.Context, f AdminModelGatewayAuditFilter) ([]*AdminGenerationLogRow, int64, error) {
+	if f.Page <= 0 {
+		f.Page = 1
+	}
+	if f.PageSize <= 0 || f.PageSize > 200 {
+		f.PageSize = 20
+	}
+
+	where := []string{"t.deleted_at IS NULL"}
+	args := []any{}
+	where, args = appendModelGatewayAuditTypeFilter(where, args, f.AuditType)
+	if f.Kind != "" {
+		where = append(where, "t.kind = ?")
+		args = append(args, f.Kind)
+	}
+	if f.ModelCode != "" {
+		where = append(where, "t.model_code = ?")
+		args = append(args, f.ModelCode)
+	}
+	if f.Status != nil {
+		where = append(where, "t.status = ?")
+		args = append(args, *f.Status)
+	}
+	if f.SourceCode != "" {
+		where = append(where, "t.params LIKE ?")
+		args = append(args, "%"+strings.TrimSpace(f.SourceCode)+"%")
+	}
+	if f.SkipReason != "" {
+		where = append(where, "t.params LIKE ?")
+		args = append(args, "%"+strings.TrimSpace(f.SkipReason)+"%")
+	}
+	if f.PricingSource != "" {
+		where = append(where, "t.params LIKE ?")
+		args = append(args, "%"+strings.TrimSpace(f.PricingSource)+"%")
+	}
+	if f.Settlement != "" {
+		where = append(where, "t.params LIKE ?")
+		args = append(args, "%"+strings.TrimSpace(f.Settlement)+"%")
+	}
+	if kw := strings.TrimSpace(f.Keyword); kw != "" {
+		like := "%" + kw + "%"
+		where = append(where, `(t.task_id = ? OR CAST(t.user_id AS CHAR) = ? OR t.model_code LIKE ? OR t.prompt LIKE ? OR t.params LIKE ? OR u.email LIKE ? OR u.phone LIKE ? OR u.username LIKE ?)`)
+		args = append(args, kw, kw, like, like, like, like, like, like)
+	}
+	whereSQL := strings.Join(where, " AND ")
+
+	var total int64
+	countSQL := `SELECT COUNT(1)
+FROM generation_task t
+LEFT JOIN ` + "`user`" + ` u ON u.id = t.user_id
+LEFT JOIN api_key k ON k.id = t.from_api_key_id
+WHERE ` + whereSQL
+	if err := r.db.WithContext(ctx).Raw(countSQL, args...).Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, (f.Page-1)*f.PageSize, f.PageSize)
+	querySQL := `SELECT
+  t.task_id,
+  t.created_at,
+  t.user_id,
+  COALESCE(NULLIF(u.username, ''), NULLIF(u.email, ''), NULLIF(u.phone, ''), CONCAT('用户 #', t.user_id)) AS user_label,
+  t.from_api_key_id AS api_key_id,
+  CASE WHEN k.id IS NULL THEN NULL ELSE CONCAT(k.name, ' · ', k.prefix, '…', k.last4) END AS key_label,
+  t.kind,
+  t.model_code,
+  t.prompt,
+  t.status,
+  CASE
+    WHEN t.started_at IS NULL THEN NULL
+    ELSE TIMESTAMPDIFF(MICROSECOND, t.started_at, COALESCE(t.finished_at, t.updated_at)) DIV 1000
+  END AS duration_ms,
+  t.cost_points,
+  (SELECT COALESCE(r.thumb_url, r.url) FROM generation_result r WHERE r.task_id = t.task_id AND r.deleted_at IS NULL ORDER BY r.seq ASC, r.id ASC LIMIT 1) AS preview_url,
+  t.params,
+  t.error
+FROM generation_task t
+LEFT JOIN ` + "`user`" + ` u ON u.id = t.user_id
+LEFT JOIN api_key k ON k.id = t.from_api_key_id
+WHERE ` + whereSQL + `
+ORDER BY t.id DESC
+LIMIT ?, ?`
+	var rows []*AdminGenerationLogRow
+	if err := r.db.WithContext(ctx).Raw(querySQL, queryArgs...).Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+const (
+	modelGatewayRouteSnapshotLike   = "%\"_model_gateway_route_snapshot\"%"
+	modelGatewayPricingSnapshotLike = "%\"_model_gateway_pricing_snapshot\"%"
+	modelGatewayOutputSnapshotLike  = "%\"_model_gateway_output_snapshot\"%"
+	modelGatewayVideoJobLike        = "%\"_model_gateway_video_job\"%"
+	modelGatewayOutputPresentLike   = "%\"output_present\":true%"
+	modelGatewayOutputPresentSpaced = "%\"output_present\": true%"
+)
+
+func appendModelGatewayAuditTypeFilter(where []string, args []any, auditType string) ([]string, []any) {
+	hasAnyAuditSnapshot := "(t.params LIKE ? OR t.params LIKE ? OR t.params LIKE ? OR t.params LIKE ?)"
+	switch strings.TrimSpace(auditType) {
+	case "route":
+		return append(where, "t.params LIKE ?"), append(args, modelGatewayRouteSnapshotLike)
+	case "pricing":
+		return append(where, "t.params LIKE ?"), append(args, modelGatewayPricingSnapshotLike)
+	case "output":
+		where = append(where,
+			hasAnyAuditSnapshot,
+			"(t.params LIKE ? OR t.params LIKE ? OR EXISTS (SELECT 1 FROM generation_result gr WHERE gr.task_id = t.task_id AND gr.deleted_at IS NULL))",
+		)
+		args = append(args, modelGatewayRouteSnapshotLike, modelGatewayPricingSnapshotLike, modelGatewayOutputSnapshotLike, modelGatewayVideoJobLike, modelGatewayOutputPresentLike, modelGatewayOutputPresentSpaced)
+		return where, args
+	case "output_missing":
+		where = append(where,
+			hasAnyAuditSnapshot,
+			"t.params NOT LIKE ?",
+			"t.params NOT LIKE ?",
+			"NOT EXISTS (SELECT 1 FROM generation_result gr WHERE gr.task_id = t.task_id AND gr.deleted_at IS NULL)",
+		)
+		args = append(args, modelGatewayRouteSnapshotLike, modelGatewayPricingSnapshotLike, modelGatewayOutputSnapshotLike, modelGatewayVideoJobLike, modelGatewayOutputPresentLike, modelGatewayOutputPresentSpaced)
+		return where, args
+	case "video":
+		return append(where, "t.params LIKE ?"), append(args, modelGatewayVideoJobLike)
+	case "video_missing":
+		where = append(where,
+			"t.kind = 'video'",
+			hasAnyAuditSnapshot,
+			"t.params NOT LIKE ?",
+		)
+		args = append(args, modelGatewayRouteSnapshotLike, modelGatewayPricingSnapshotLike, modelGatewayOutputSnapshotLike, modelGatewayVideoJobLike, modelGatewayVideoJobLike)
+		return where, args
+	default:
+		return append(where, hasAnyAuditSnapshot), append(args, modelGatewayRouteSnapshotLike, modelGatewayPricingSnapshotLike, modelGatewayOutputSnapshotLike, modelGatewayVideoJobLike)
+	}
 }
 
 // SoftDeleteAdminLogsBefore marks generation logs and their result rows as deleted.
@@ -311,15 +465,28 @@ func (r *GenerationRepo) GetByIdem(ctx context.Context, userID uint64, idem stri
 
 // SetRunning 标记任务进入运行态。
 func (r *GenerationRepo) SetRunning(ctx context.Context, taskID string, accountID uint64) error {
+	return r.setRunning(ctx, taskID, &accountID)
+}
+
+// SetRunningNoAccount marks a task running when the upstream is an API Channel
+// rather than an account-pool account.
+func (r *GenerationRepo) SetRunningNoAccount(ctx context.Context, taskID string) error {
+	return r.setRunning(ctx, taskID, nil)
+}
+
+func (r *GenerationRepo) setRunning(ctx context.Context, taskID string, accountID *uint64) error {
 	now := time.Now().UTC()
+	updates := map[string]any{
+		"status":     model.GenStatusRunning,
+		"started_at": gorm.Expr("COALESCE(started_at, ?)", now),
+		"progress":   5,
+	}
+	if accountID != nil {
+		updates["account_id"] = *accountID
+	}
 	return r.db.WithContext(ctx).Model(&model.GenerationTask{}).
 		Where("task_id = ? AND status IN ?", taskID, []int8{model.GenStatusPending, model.GenStatusRunning}).
-		Updates(map[string]any{
-			"status":     model.GenStatusRunning,
-			"account_id": accountID,
-			"started_at": gorm.Expr("COALESCE(started_at, ?)", now),
-			"progress":   5,
-		}).Error
+		Updates(updates).Error
 }
 
 // UpdateProgress 更新进度（0-100）。
@@ -377,6 +544,52 @@ func (r *GenerationRepo) UpdateCost(ctx context.Context, taskID string, cost int
 	return r.db.WithContext(ctx).Model(&model.GenerationTask{}).
 		Where("task_id = ?", taskID).
 		Update("cost_points", cost).Error
+}
+
+// MergeParams merges a small audit patch into generation_task.params.
+// When both existing and patch values are JSON objects, it performs a one-level
+// deep merge so callers can append settlement fields to existing snapshots.
+func (r *GenerationRepo) MergeParams(ctx context.Context, taskID string, patch map[string]any) error {
+	if r == nil || r.db == nil || strings.TrimSpace(taskID) == "" || len(patch) == 0 {
+		return nil
+	}
+	var t model.GenerationTask
+	if err := r.db.WithContext(ctx).
+		Select("params").
+		Where("task_id = ?", taskID).
+		First(&t).Error; err != nil {
+		return err
+	}
+	params := map[string]any{}
+	if strings.TrimSpace(t.Params) != "" {
+		_ = json.Unmarshal([]byte(t.Params), &params)
+	}
+	if params == nil {
+		params = map[string]any{}
+	}
+	mergeParamPatch(params, patch)
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	return r.db.WithContext(ctx).Model(&model.GenerationTask{}).
+		Where("task_id = ?", taskID).
+		Update("params", string(raw)).Error
+}
+
+func mergeParamPatch(dst map[string]any, patch map[string]any) {
+	for key, value := range patch {
+		next, nextOK := value.(map[string]any)
+		current, currentOK := dst[key].(map[string]any)
+		if nextOK && currentOK {
+			for nestedKey, nestedValue := range next {
+				current[nestedKey] = nestedValue
+			}
+			dst[key] = current
+			continue
+		}
+		dst[key] = value
+	}
 }
 
 // ListByUser 用户任务列表。

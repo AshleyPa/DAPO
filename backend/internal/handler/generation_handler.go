@@ -29,17 +29,18 @@ import (
 
 // GenerationHandler 生成任务 handler。
 type GenerationHandler struct {
-	svc     *service.GenerationService
-	chatSvc *service.ChatService
-	repo    *repo.GenerationRepo
-	accRepo *repo.AccountRepo
-	cfg     *service.SystemConfigService
-	aes     *crypto.AESGCM
+	svc       *service.GenerationService
+	chatSvc   *service.ChatService
+	repo      *repo.GenerationRepo
+	accRepo   *repo.AccountRepo
+	cfg       *service.SystemConfigService
+	aes       *crypto.AESGCM
+	modelRepo *repo.ModelCatalogRepo
 }
 
 // NewGenerationHandler 构造。
-func NewGenerationHandler(svc *service.GenerationService, chatSvc *service.ChatService, r *repo.GenerationRepo, accRepo *repo.AccountRepo, cfg *service.SystemConfigService, aes *crypto.AESGCM) *GenerationHandler {
-	return &GenerationHandler{svc: svc, chatSvc: chatSvc, repo: r, accRepo: accRepo, cfg: cfg, aes: aes}
+func NewGenerationHandler(svc *service.GenerationService, chatSvc *service.ChatService, r *repo.GenerationRepo, accRepo *repo.AccountRepo, cfg *service.SystemConfigService, aes *crypto.AESGCM, modelRepo *repo.ModelCatalogRepo) *GenerationHandler {
+	return &GenerationHandler{svc: svc, chatSvc: chatSvc, repo: r, accRepo: accRepo, cfg: cfg, aes: aes, modelRepo: modelRepo}
 }
 
 type publicModelResp struct {
@@ -48,6 +49,9 @@ type publicModelResp struct {
 	Kind             string                     `json:"kind"`
 	Provider         string                     `json:"provider"`
 	UpstreamModel    string                     `json:"upstream_model,omitempty"`
+	Capabilities     []string                   `json:"capabilities,omitempty"`
+	ParametersSchema any                        `json:"parameters_schema,omitempty"`
+	PricingMode      string                     `json:"pricing_mode,omitempty"`
 	UnitPoints       int64                      `json:"unit_points"`
 	InputUnitPoints  int64                      `json:"input_unit_points,omitempty"`
 	OutputUnitPoints int64                      `json:"output_unit_points,omitempty"`
@@ -61,6 +65,7 @@ type publicImagePriceRuleResp struct {
 	RatioGroup string   `json:"ratio_group,omitempty"`
 	Ratios     []string `json:"ratios,omitempty"`
 	Resolution string   `json:"resolution"`
+	Quality    string   `json:"quality,omitempty"`
 	UnitPoints int64    `json:"unit_points"`
 	Enabled    bool     `json:"enabled"`
 }
@@ -218,6 +223,8 @@ func (h *GenerationHandler) CreateText(c *gin.Context) {
 	if req.MaxTokens <= 0 {
 		req.MaxTokens = 1200
 	}
+	body := map[string]any{}
+	applyTextGenerationParams(body, req.Params)
 	content := any(req.Prompt)
 	if len(req.Images) > 0 {
 		parts := []map[string]any{{"type": "text", "text": req.Prompt}}
@@ -228,15 +235,14 @@ func (h *GenerationHandler) CreateText(c *gin.Context) {
 		}
 		content = parts
 	}
+	body["model"] = req.ModelCode
+	body["messages"] = []map[string]any{{"role": "user", "content": content}}
+	body["max_tokens"] = req.MaxTokens
 	raw, status, err := h.chatSvc.Complete(c.Request.Context(), service.ChatCallRequest{
 		UserID:   middleware.MustUID(c),
 		ClientIP: c.ClientIP(),
 		IdemKey:  c.GetHeader("Idempotency-Key"),
-		Body: map[string]any{
-			"model":      req.ModelCode,
-			"messages":   []map[string]any{{"role": "user", "content": content}},
-			"max_tokens": req.MaxTokens,
-		},
+		Body:     body,
 	})
 	if err != nil {
 		response.Fail(c, err)
@@ -247,6 +253,18 @@ func (h *GenerationHandler) CreateText(c *gin.Context) {
 		return
 	}
 	response.OK(c, parseTextGenerationResp(raw, req.ModelCode))
+}
+
+func applyTextGenerationParams(body map[string]any, params map[string]any) {
+	for rawKey, value := range params {
+		key := strings.TrimSpace(rawKey)
+		switch key {
+		case "", "model", "messages", "max_tokens", "stream":
+			continue
+		default:
+			body[key] = value
+		}
+	}
 }
 
 // Get GET /api/v1/gen/tasks/:task_id
@@ -565,6 +583,83 @@ func assetDisposition(rawURL string) string {
 }
 
 func (h *GenerationHandler) publicModels(ctx context.Context) []publicModelResp {
+	if rows, ok := h.catalogPublicModels(ctx); ok {
+		return rows
+	}
+	return h.legacyPublicModels(ctx)
+}
+
+func (h *GenerationHandler) catalogPublicModels(ctx context.Context) ([]publicModelResp, bool) {
+	if h.modelRepo == nil {
+		return nil, false
+	}
+	visible := int8(1)
+	status := int8(model.ModelCatalogStatusEnabled)
+	items, _, err := h.modelRepo.List(ctx, repo.ModelCatalogListFilter{
+		Status:   &status,
+		Visible:  &visible,
+		Page:     1,
+		PageSize: 200,
+	})
+	if err != nil || len(items) == 0 {
+		return nil, false
+	}
+	legacy := mapPublicModels(h.legacyPublicModels(ctx))
+	rows := make([]publicModelResp, 0, len(items))
+	for _, item := range items {
+		if item == nil || strings.TrimSpace(item.ModelCode) == "" {
+			continue
+		}
+		row := publicModelResp{
+			ModelCode:        item.ModelCode,
+			Name:             fallbackString(item.DisplayName, item.ModelCode),
+			Kind:             publicModelKind(item.EntryKind),
+			Provider:         item.ProviderHint,
+			UpstreamModel:    item.UpstreamDefaultModel,
+			Capabilities:     publicStringListJSON(item.Capabilities),
+			ParametersSchema: publicJSONValue(item.ParametersSchema),
+			PricingMode:      publicModelPricingMode(item.PricingMode, publicModelKind(item.EntryKind), item.UnitPoints, item.InputUnitPoints, item.OutputUnitPoints),
+			UnitPoints:       item.UnitPoints,
+			InputUnitPoints:  item.InputUnitPoints,
+			OutputUnitPoints: item.OutputUnitPoints,
+			Enabled:          true,
+		}
+		if old, ok := legacy[item.ModelCode]; ok {
+			if row.Provider == "" {
+				row.Provider = old.Provider
+			}
+			if row.UpstreamModel == "" {
+				row.UpstreamModel = old.UpstreamModel
+			}
+			if row.UnitPoints <= 0 {
+				row.UnitPoints = old.UnitPoints
+			}
+			if row.InputUnitPoints <= 0 {
+				row.InputUnitPoints = old.InputUnitPoints
+			}
+			if row.OutputUnitPoints <= 0 {
+				row.OutputUnitPoints = old.OutputUnitPoints
+			}
+		}
+		if row.Provider == "" {
+			row.Provider = "api"
+		}
+		if row.UpstreamModel == "" {
+			row.UpstreamModel = item.ModelCode
+		}
+		if row.Kind == string(provider.KindImage) {
+			if rules, ok := catalogImagePriceRules(item); ok {
+				row.ImagePriceRules = publicImagePriceRulesFromRules(rules)
+			} else {
+				row.ImagePriceRules = h.publicImagePriceRules(ctx, item.ModelCode)
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows, len(rows) > 0
+}
+
+func (h *GenerationHandler) legacyPublicModels(ctx context.Context) []publicModelResp {
 	raw := ""
 	if h.cfg != nil {
 		raw = h.cfg.GetString(ctx, "billing.model_prices", "")
@@ -602,6 +697,7 @@ func (h *GenerationHandler) publicModels(ctx context.Context) []publicModelResp 
 					Kind:             row.Kind,
 					Provider:         row.Provider,
 					UpstreamModel:    row.UpstreamModel,
+					PricingMode:      publicModelPricingMode("", row.Kind, row.UnitPoints, row.InputUnitPoints, row.OutputUnitPoints),
 					UnitPoints:       row.UnitPoints,
 					InputUnitPoints:  row.InputUnitPoints,
 					OutputUnitPoints: row.OutputUnitPoints,
@@ -632,6 +728,7 @@ func publicImagePriceRulesFromRules(rules []service.ImagePriceRule) []publicImag
 			RatioGroup: rule.RatioGroup,
 			Ratios:     append([]string(nil), rule.Ratios...),
 			Resolution: rule.Resolution,
+			Quality:    rule.Quality,
 			UnitPoints: rule.UnitPoints,
 			Enabled:    rule.Enabled == nil || *rule.Enabled,
 		})
@@ -639,14 +736,99 @@ func publicImagePriceRulesFromRules(rules []service.ImagePriceRule) []publicImag
 	return out
 }
 
+func catalogImagePriceRules(item *model.ModelCatalog) ([]service.ImagePriceRule, bool) {
+	if item == nil || item.PriceRules == nil || strings.TrimSpace(*item.PriceRules) == "" {
+		return nil, false
+	}
+	var rules []service.ImagePriceRule
+	if err := json.Unmarshal([]byte(*item.PriceRules), &rules); err != nil || len(rules) == 0 {
+		return nil, false
+	}
+	return rules, true
+}
+
+func publicStringListJSON(raw *string) []string {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(*raw), &values); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func publicJSONValue(raw *string) any {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal([]byte(*raw), &value); err != nil {
+		return nil
+	}
+	return value
+}
+
+func mapPublicModels(rows []publicModelResp) map[string]publicModelResp {
+	out := make(map[string]publicModelResp, len(rows))
+	for _, row := range rows {
+		if row.ModelCode != "" {
+			out[row.ModelCode] = row
+		}
+	}
+	return out
+}
+
+func publicModelKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case model.ModelCatalogKindChat:
+		return model.ModelCatalogKindText
+	case model.ModelCatalogKindText, model.ModelCatalogKindImage, model.ModelCatalogKindVideo:
+		return strings.ToLower(strings.TrimSpace(kind))
+	default:
+		return model.ModelCatalogKindText
+	}
+}
+
+func publicModelPricingMode(modeValue, kind string, unitPoints, inputPoints, outputPoints int64) string {
+	modeValue = strings.ToLower(strings.TrimSpace(modeValue))
+	switch modeValue {
+	case model.ModelCatalogPricingFixed, model.ModelCatalogPricingToken, model.ModelCatalogPricingChar, model.ModelCatalogPricingMatrix, model.ModelCatalogPricingManual:
+		return modeValue
+	}
+	if kind == model.ModelCatalogKindText || kind == model.ModelCatalogKindChat {
+		if inputPoints > 0 || outputPoints > 0 {
+			return model.ModelCatalogPricingToken
+		}
+		return model.ModelCatalogPricingManual
+	}
+	if kind == model.ModelCatalogKindImage || kind == model.ModelCatalogKindVideo {
+		if unitPoints > 0 {
+			return model.ModelCatalogPricingFixed
+		}
+		return model.ModelCatalogPricingMatrix
+	}
+	return model.ModelCatalogPricingManual
+}
+
 func defaultPublicModels() []publicModelResp {
 	return []publicModelResp{
-		{ModelCode: "grok-4.20-fast", Name: "Grok Fast", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-fast", InputUnitPoints: 100, OutputUnitPoints: 300, Enabled: true},
-		{ModelCode: "grok-4.20-auto", Name: "Grok Auto", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-auto", InputUnitPoints: 150, OutputUnitPoints: 450, Enabled: true},
-		{ModelCode: "grok-4.20-expert", Name: "Grok Expert", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-expert", InputUnitPoints: 200, OutputUnitPoints: 600, Enabled: true},
-		{ModelCode: "grok-4.20-heavy", Name: "Grok Heavy", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-heavy", InputUnitPoints: 400, OutputUnitPoints: 1200, Enabled: true},
-		{ModelCode: "gpt-image-2", Name: "GPT Image 2", Kind: "image", Provider: "gpt", UpstreamModel: "gpt-image-2", UnitPoints: 400, Enabled: true, ImagePriceRules: publicImagePriceRulesFromRules(service.DefaultImagePriceRulesForModel("gpt-image-2"))},
-		{ModelCode: "grok-imagine-video", Name: "Grok Imagine 视频", Kind: "video", Provider: "grok", UpstreamModel: "grok-imagine-video", UnitPoints: 2000, Enabled: true},
+		{ModelCode: "grok-4.20-fast", Name: "Grok Fast", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-fast", PricingMode: model.ModelCatalogPricingToken, InputUnitPoints: 100, OutputUnitPoints: 300, Enabled: true},
+		{ModelCode: "grok-4.20-auto", Name: "Grok Auto", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-auto", PricingMode: model.ModelCatalogPricingToken, InputUnitPoints: 150, OutputUnitPoints: 450, Enabled: true},
+		{ModelCode: "grok-4.20-expert", Name: "Grok Expert", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-expert", PricingMode: model.ModelCatalogPricingToken, InputUnitPoints: 200, OutputUnitPoints: 600, Enabled: true},
+		{ModelCode: "grok-4.20-heavy", Name: "Grok Heavy", Kind: "text", Provider: "grok", UpstreamModel: "grok-4.20-heavy", PricingMode: model.ModelCatalogPricingToken, InputUnitPoints: 400, OutputUnitPoints: 1200, Enabled: true},
+		{ModelCode: "gpt-image-2", Name: "GPT Image 2", Kind: "image", Provider: "gpt", UpstreamModel: "gpt-image-2", PricingMode: model.ModelCatalogPricingMatrix, UnitPoints: 400, Enabled: true, ImagePriceRules: publicImagePriceRulesFromRules(service.DefaultImagePriceRulesForModel("gpt-image-2"))},
+		{ModelCode: "grok-imagine-video", Name: "Grok Imagine 视频", Kind: "video", Provider: "grok", UpstreamModel: "grok-imagine-video", PricingMode: model.ModelCatalogPricingFixed, UnitPoints: 2000, Enabled: true},
 	}
 }
 

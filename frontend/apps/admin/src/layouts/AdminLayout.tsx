@@ -3,7 +3,9 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   BadgeDollarSign,
   ChevronDown,
+  ClipboardList,
   FileText,
+  GitBranch,
   Globe2,
   Images,
   KeyRound,
@@ -33,6 +35,9 @@ const APP_VERSION = 'v2.0.1';
 const NAV = [
   { to: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
   { to: '/accounts', label: 'Token 管理', icon: KeyRound },
+  { to: '/api-channels', label: 'API 渠道', icon: Globe2 },
+  { to: '/model-gateway', label: '模型库', icon: GitBranch },
+  { to: '/model-gateway-audit', label: '模型审计', icon: ClipboardList },
   { to: '/proxies', label: '代理管理', icon: Globe2 },
   { to: '/users', label: '用户管理', icon: Users },
   { to: '/billing', label: '充值消费', icon: Wallet },
@@ -42,7 +47,7 @@ const NAV = [
   { to: '/config', label: '系统配置', icon: Settings },
   { to: '/billing-settings', label: '扣费设置', icon: ReceiptText },
   { to: '/recharge-packages', label: '充值套餐', icon: WalletCards },
-  { to: '/model-prices', label: '模型价格', icon: BadgeDollarSign },
+  { to: '/model-prices', label: '兼容价格', icon: BadgeDollarSign },
   { to: '/logs', label: '请求日志', icon: FileText },
 ] as const;
 

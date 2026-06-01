@@ -9,7 +9,7 @@ type CreateImageReq struct {
 	Mode      string         `json:"mode"         binding:"omitempty,oneof=t2i i2i"`
 	Count     int            `json:"count"        binding:"omitempty,min=1,max=4"`
 	Ratio     string         `json:"ratio"        binding:"omitempty"`
-	Quality   string         `json:"quality"      binding:"omitempty,oneof=draft standard hd"`
+	Quality   string         `json:"quality"      binding:"omitempty,oneof=draft low standard medium hd high ultra"`
 	RefAssets []string       `json:"ref_assets"   binding:"omitempty"`
 	Params    map[string]any `json:"params"       binding:"omitempty"`
 }
@@ -28,10 +28,11 @@ type CreateVideoReq struct {
 
 // CreateTextReq 创建文字创作任务。
 type CreateTextReq struct {
-	ModelCode string   `json:"model"      binding:"omitempty,max=64"`
-	Prompt    string   `json:"prompt"     binding:"required,min=1,max=5000"`
-	MaxTokens int      `json:"max_tokens" binding:"omitempty,min=1,max=8000"`
-	Images    []string `json:"images"     binding:"omitempty"`
+	ModelCode string         `json:"model"      binding:"omitempty,max=64"`
+	Prompt    string         `json:"prompt"     binding:"required,min=1,max=5000"`
+	MaxTokens int            `json:"max_tokens" binding:"omitempty,min=1,max=8000"`
+	Images    []string       `json:"images"     binding:"omitempty"`
+	Params    map[string]any `json:"params"     binding:"omitempty"`
 }
 
 // TextGenerationResp 文字创作响应。

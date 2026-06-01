@@ -14,6 +14,20 @@ import type {
   AccountSecretsResp,
   AccountTestResp,
   AccountUpdateBody,
+  APIChannelBody,
+  APIChannelItem,
+  APIChannelKeyBody,
+  APIChannelKeyItem,
+  APIChannelSecretsResp,
+  APIChannelTestResp,
+  ModelCatalogBody,
+  ModelCatalogItem,
+  ModelGatewayDryRunReq,
+  ModelGatewayDryRunResp,
+  ModelGatewayAuditItem,
+  ModelSourceBody,
+  ModelSourceConflictItem,
+  ModelSourceItem,
   AdminPromptGalleryBody,
   AdminPromptGalleryItem,
   AdminPromptGalleryReorderBody,
@@ -23,6 +37,7 @@ import type {
   AdminUserCreateBody,
   AdminGenerationLogItem,
   AdminGenerationLogPurgeResp,
+  AdminGenerationBillingProof,
   AdminGenerationUpstreamLogItem,
   AdminPromoBody,
   AdminPromoItem,
@@ -102,7 +117,7 @@ export interface GenerationLogListQuery {
 
 export interface UpstreamFailureListQuery {
   keyword?: string;
-  provider?: 'gpt' | 'grok' | '';
+  provider?: 'gpt' | 'grok' | 'api_channel' | '';
   account_id?: number;
   stage?: string;
   status_code?: number;
@@ -116,6 +131,8 @@ export const logsApi = {
     request<PageData<AdminGenerationLogItem>>({ url: '/logs/generations', method: 'GET', params: q }),
   generationUpstream: (taskId: string) =>
     request<AdminGenerationUpstreamLogItem[]>({ url: `/logs/generations/${taskId}/upstream`, method: 'GET' }),
+  generationBilling: (taskId: string) =>
+    request<AdminGenerationBillingProof>({ url: `/logs/generations/${taskId}/billing`, method: 'GET' }),
   upstreamFailures: (q: UpstreamFailureListQuery = {}) =>
     request<PageData<AdminGenerationUpstreamLogItem>>({ url: '/logs/upstream-failures', method: 'GET', params: q }),
   purgeGenerations: (days: number) =>
@@ -254,6 +271,99 @@ export const accountsApi = {
       method: 'POST',
       data: body,
     }),
+};
+
+export interface APIChannelListQuery {
+  adapter?: string;
+  status?: 0 | 1 | '';
+  keyword?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export const apiChannelsApi = {
+  list: (q: APIChannelListQuery = {}) =>
+    request<PageData<APIChannelItem>>({ url: '/api-channels', method: 'GET', params: q }),
+  create: (body: APIChannelBody) =>
+    request<{ id: number }>({ url: '/api-channels', method: 'POST', data: body }),
+  update: (id: number, body: Partial<APIChannelBody>) =>
+    request<void>({ url: `/api-channels/${id}`, method: 'PUT', data: body }),
+  remove: (id: number) =>
+    request<void>({ url: `/api-channels/${id}`, method: 'DELETE' }),
+  secrets: (id: number) =>
+    request<APIChannelSecretsResp>({ url: `/api-channels/${id}/secrets`, method: 'GET' }),
+  test: (id: number) =>
+    request<APIChannelTestResp>({ url: `/api-channels/${id}/test`, method: 'POST' }),
+  keys: async (id: number) => {
+    const r = await request<{ list: APIChannelKeyItem[] } | APIChannelKeyItem[] | null>({
+      url: `/api-channels/${id}/keys`,
+      method: 'GET',
+    });
+    if (Array.isArray(r)) return r;
+    return r?.list ?? [];
+  },
+  createKey: (id: number, body: APIChannelKeyBody) =>
+    request<{ id: number }>({ url: `/api-channels/${id}/keys`, method: 'POST', data: body }),
+  updateKey: (id: number, keyID: number, body: Partial<APIChannelKeyBody>) =>
+    request<void>({ url: `/api-channels/${id}/keys/${keyID}`, method: 'PUT', data: body }),
+  removeKey: (id: number, keyID: number) =>
+    request<void>({ url: `/api-channels/${id}/keys/${keyID}`, method: 'DELETE' }),
+};
+
+export interface ModelCatalogListQuery {
+  entry_kind?: string;
+  status?: 0 | 1 | '';
+  visible?: 0 | 1 | '';
+  keyword?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export interface ModelSourceListQuery {
+  model_code?: string;
+  source_type?: string;
+  status?: 0 | 1 | '';
+  page?: number;
+  page_size?: number;
+}
+
+export interface ModelGatewayAuditListQuery {
+  keyword?: string;
+  kind?: 'image' | 'video' | 'chat' | 'text' | '';
+  model_code?: string;
+  source_code?: string;
+  skip_reason?: string;
+  pricing_source?: string;
+  settlement?: string;
+  audit_type?: 'all' | 'route' | 'pricing' | 'output' | 'output_missing' | 'video' | 'video_missing';
+  status?: 0 | 1 | 2 | 3 | 4 | '';
+  page?: number;
+  page_size?: number;
+}
+
+export const modelGatewayApi = {
+  models: (q: ModelCatalogListQuery = {}) =>
+    request<PageData<ModelCatalogItem>>({ url: '/model-gateway/models', method: 'GET', params: q }),
+  createModel: (body: ModelCatalogBody) =>
+    request<{ id: number }>({ url: '/model-gateway/models', method: 'POST', data: body }),
+  updateModel: (id: number, body: Partial<ModelCatalogBody>) =>
+    request<void>({ url: `/model-gateway/models/${id}`, method: 'PUT', data: body }),
+  removeModel: (id: number) =>
+    request<void>({ url: `/model-gateway/models/${id}`, method: 'DELETE' }),
+  sources: (q: ModelSourceListQuery = {}) =>
+    request<PageData<ModelSourceItem>>({ url: '/model-gateway/sources', method: 'GET', params: q }),
+  sourceConflicts: () =>
+    request<ModelSourceConflictItem[]>({ url: '/model-gateway/source-conflicts', method: 'GET' }),
+  createSource: (body: ModelSourceBody) =>
+    request<{ id: number }>({ url: '/model-gateway/sources', method: 'POST', data: body }),
+  updateSource: (id: number, body: Partial<ModelSourceBody>) =>
+    request<void>({ url: `/model-gateway/sources/${id}`, method: 'PUT', data: body }),
+  removeSource: (id: number) =>
+    request<void>({ url: `/model-gateway/sources/${id}`, method: 'DELETE' }),
+  dryRun: (body: ModelGatewayDryRunReq) =>
+    request<ModelGatewayDryRunResp>({ url: '/model-gateway/dry-run', method: 'POST', data: body }),
+  audit: (q: ModelGatewayAuditListQuery = {}) =>
+    request<PageData<ModelGatewayAuditItem>>({ url: '/model-gateway/audit', method: 'GET', params: q }),
 };
 
 export const cdkApi = {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/kleinai/backend/internal/model"
 	"github.com/kleinai/backend/internal/provider"
@@ -42,11 +43,19 @@ type ProviderRouteOption struct {
 }
 
 type ProviderRoute struct {
+	SourceType    string `json:"source_type,omitempty"`
+	SourceCode    string `json:"source_code,omitempty"`
+	Adapter       string `json:"adapter,omitempty"`
 	Provider      string `json:"provider"`
 	UpstreamModel string `json:"upstream_model"`
 	AuthType      string `json:"auth_type,omitempty"`
 	ImageAPIMode  string `json:"image_api_mode,omitempty"`
 	Strategy      string `json:"strategy"`
+	Weight        int    `json:"weight,omitempty"`
+	Priority      int    `json:"priority,omitempty"`
+	SkipReason    string `json:"skip_reason,omitempty"`
+	RouteIndex    int    `json:"-"`
+	Attempt       int    `json:"-"`
 }
 
 type ProviderRouteTrace struct {
@@ -117,6 +126,8 @@ func (s *ProviderRouteService) ResolveCandidates(ctx context.Context, kind provi
 		candidate := ProviderRoute{
 			Provider: strings.TrimSpace(fallbackProvider),
 			Strategy: strategy,
+			Weight:   option.Weight,
+			Priority: option.Priority,
 		}
 		if option.Provider != "" {
 			candidate.Provider = strings.TrimSpace(option.Provider)
@@ -242,8 +253,13 @@ func appendProviderRouteCandidate(routes []ProviderRoute, route ProviderRoute) [
 	if strings.TrimSpace(route.Provider) == "" {
 		return routes
 	}
+	route.Priority = normalizeRuntimeRoutePriority(route.Priority)
+	route.Weight = normalizeRuntimeRouteWeight(route.Weight)
 	for _, existing := range routes {
-		if strings.EqualFold(existing.Provider, route.Provider) &&
+		if strings.EqualFold(existing.SourceType, route.SourceType) &&
+			strings.EqualFold(existing.SourceCode, route.SourceCode) &&
+			strings.EqualFold(existing.Adapter, route.Adapter) &&
+			strings.EqualFold(existing.Provider, route.Provider) &&
 			strings.EqualFold(existing.UpstreamModel, route.UpstreamModel) &&
 			strings.EqualFold(existing.AuthType, route.AuthType) &&
 			strings.EqualFold(existing.ImageAPIMode, route.ImageAPIMode) &&
@@ -252,6 +268,239 @@ func appendProviderRouteCandidate(routes []ProviderRoute, route ProviderRoute) [
 		}
 	}
 	return append(routes, route)
+}
+
+var defaultModelSourceRoutePicker = newModelSourceRoutePicker()
+
+type modelSourceRoutePicker struct {
+	mu      sync.Mutex
+	offsets map[string]int
+}
+
+func newModelSourceRoutePicker() *modelSourceRoutePicker {
+	return &modelSourceRoutePicker{offsets: make(map[string]int)}
+}
+
+func (p *modelSourceRoutePicker) orderIndexes(key string, weights []int) []int {
+	if len(weights) == 0 {
+		return nil
+	}
+	seq := weightedIndexSequence(weights)
+	if len(seq) == 0 {
+		out := make([]int, 0, len(weights))
+		for i := range weights {
+			out = append(out, i)
+		}
+		return out
+	}
+	p.mu.Lock()
+	offset := p.offsets[key] % len(seq)
+	p.offsets[key] = (offset + 1) % len(seq)
+	p.mu.Unlock()
+
+	out := make([]int, 0, len(weights))
+	seen := make(map[int]bool, len(weights))
+	for step := 0; len(out) < len(weights) && step < len(seq)*2; step++ {
+		idx := seq[(offset+step)%len(seq)]
+		if idx < 0 || idx >= len(weights) || seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		out = append(out, idx)
+	}
+	for i := range weights {
+		if !seen[i] {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func weightedIndexSequence(weights []int) []int {
+	normalized := make([]int, 0, len(weights))
+	for _, weight := range weights {
+		normalized = append(normalized, normalizeRuntimeRouteWeight(weight))
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	divisor := normalized[0]
+	for _, weight := range normalized[1:] {
+		divisor = gcdInt(divisor, weight)
+	}
+	maxWeight := 0
+	for i, weight := range normalized {
+		weight = weight / divisor
+		normalized[i] = weight
+		if weight > maxWeight {
+			maxWeight = weight
+		}
+	}
+	if maxWeight > 100 {
+		for i, weight := range normalized {
+			scaled := weight * 100 / maxWeight
+			if scaled <= 0 {
+				scaled = 1
+			}
+			normalized[i] = scaled
+		}
+		maxWeight = 100
+	}
+	out := make([]int, 0)
+	for round := 0; round < maxWeight; round++ {
+		for i, weight := range normalized {
+			if weight > round {
+				out = append(out, i)
+			}
+		}
+	}
+	return out
+}
+
+func orderProviderRoutesForRuntime(modelCode, kind string, routes []ProviderRoute) []ProviderRoute {
+	return orderProviderRoutesForRuntimeWithPicker(defaultModelSourceRoutePicker, modelCode, kind, routes)
+}
+
+func orderProviderRoutesForRuntimeWithPicker(p *modelSourceRoutePicker, modelCode, kind string, routes []ProviderRoute) []ProviderRoute {
+	if len(routes) <= 1 {
+		return routes
+	}
+	sorted := append([]ProviderRoute(nil), routes...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return normalizeRuntimeRoutePriority(sorted[i].Priority) < normalizeRuntimeRoutePriority(sorted[j].Priority)
+	})
+	out := make([]ProviderRoute, 0, len(sorted))
+	for i := 0; i < len(sorted); {
+		priority := normalizeRuntimeRoutePriority(sorted[i].Priority)
+		j := i + 1
+		for j < len(sorted) && normalizeRuntimeRoutePriority(sorted[j].Priority) == priority {
+			j++
+		}
+		out = append(out, orderProviderRoutePriorityGroup(p, modelCode, kind, priority, sorted[i:j])...)
+		i = j
+	}
+	return out
+}
+
+func orderProviderRoutePriorityGroup(p *modelSourceRoutePicker, modelCode, kind string, priority int, group []ProviderRoute) []ProviderRoute {
+	if len(group) <= 1 || p == nil {
+		return group
+	}
+	weighted := providerRouteGroupUsesWeighted(group)
+	weights := make([]int, 0, len(group))
+	for _, route := range group {
+		if weighted {
+			weights = append(weights, route.Weight)
+		} else {
+			weights = append(weights, 1)
+		}
+	}
+	key := strings.Join([]string{"provider", strings.TrimSpace(kind), strings.TrimSpace(modelCode), fmt.Sprintf("%d", priority), routeGroupMode(weighted)}, "\x00")
+	order := p.orderIndexes(key, weights)
+	out := make([]ProviderRoute, 0, len(group))
+	for _, idx := range order {
+		if idx >= 0 && idx < len(group) {
+			out = append(out, group[idx])
+		}
+	}
+	return out
+}
+
+func orderChatRuntimeRoutesForRuntime(modelCode, kind string, routes []chatRuntimeRoute) []chatRuntimeRoute {
+	return orderChatRuntimeRoutesForRuntimeWithPicker(defaultModelSourceRoutePicker, modelCode, kind, routes)
+}
+
+func orderChatRuntimeRoutesForRuntimeWithPicker(p *modelSourceRoutePicker, modelCode, kind string, routes []chatRuntimeRoute) []chatRuntimeRoute {
+	if len(routes) <= 1 {
+		return routes
+	}
+	sorted := append([]chatRuntimeRoute(nil), routes...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return normalizeRuntimeRoutePriority(sorted[i].Priority) < normalizeRuntimeRoutePriority(sorted[j].Priority)
+	})
+	out := make([]chatRuntimeRoute, 0, len(sorted))
+	for i := 0; i < len(sorted); {
+		priority := normalizeRuntimeRoutePriority(sorted[i].Priority)
+		j := i + 1
+		for j < len(sorted) && normalizeRuntimeRoutePriority(sorted[j].Priority) == priority {
+			j++
+		}
+		out = append(out, orderChatRuntimeRoutePriorityGroup(p, modelCode, kind, priority, sorted[i:j])...)
+		i = j
+	}
+	return out
+}
+
+func orderChatRuntimeRoutePriorityGroup(p *modelSourceRoutePicker, modelCode, kind string, priority int, group []chatRuntimeRoute) []chatRuntimeRoute {
+	if len(group) <= 1 || p == nil {
+		return group
+	}
+	weighted := chatRuntimeRouteGroupUsesWeighted(group)
+	weights := make([]int, 0, len(group))
+	for _, route := range group {
+		if weighted {
+			weights = append(weights, route.Weight)
+		} else {
+			weights = append(weights, 1)
+		}
+	}
+	key := strings.Join([]string{"chat", strings.TrimSpace(kind), strings.TrimSpace(modelCode), fmt.Sprintf("%d", priority), routeGroupMode(weighted)}, "\x00")
+	order := p.orderIndexes(key, weights)
+	out := make([]chatRuntimeRoute, 0, len(group))
+	for _, idx := range order {
+		if idx >= 0 && idx < len(group) {
+			out = append(out, group[idx])
+		}
+	}
+	return out
+}
+
+func providerRouteGroupUsesWeighted(routes []ProviderRoute) bool {
+	for _, route := range routes {
+		if normalizeRouteStrategy(route.Strategy) == "weighted_rr" {
+			return true
+		}
+	}
+	return false
+}
+
+func chatRuntimeRouteGroupUsesWeighted(routes []chatRuntimeRoute) bool {
+	for _, route := range routes {
+		if normalizeRouteStrategy(route.Strategy) == "weighted_rr" {
+			return true
+		}
+	}
+	return false
+}
+
+func routeGroupMode(weighted bool) string {
+	if weighted {
+		return "weighted_rr"
+	}
+	return "round_robin"
+}
+
+func normalizeRuntimeRoutePriority(priority int) int {
+	if priority == 0 {
+		return 100
+	}
+	if priority < 0 {
+		return 0
+	}
+	if priority > 10000 {
+		return 10000
+	}
+	return priority
+}
+
+func normalizeRuntimeRouteWeight(weight int) int {
+	if weight <= 0 {
+		return 1
+	}
+	if weight > 10000 {
+		return 10000
+	}
+	return weight
 }
 
 func normalizeRouteStrategy(v string) string {

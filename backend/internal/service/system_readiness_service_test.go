@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/kleinai/backend/internal/dto"
+	"github.com/kleinai/backend/internal/model"
+	"github.com/kleinai/backend/internal/repo"
 	"github.com/kleinai/backend/pkg/config"
 )
 
@@ -54,6 +56,271 @@ func TestSystemReadinessAcceptsProviderRouteCoverage(t *testing.T) {
 		if got := readinessStatus(resp, "provider_routes", key); got != readinessOK {
 			t.Fatalf("provider_routes.%s status = %q, want ok", key, got)
 		}
+	}
+}
+
+func TestSystemReadinessReportsModelGatewayCoverageAndDemotesLegacyRoutes(t *testing.T) {
+	status := int8(model.ModelCatalogStatusEnabled)
+	visible := int8(1)
+	svc := NewSystemReadinessService(
+		validReadinessConfig(),
+		testSystemConfig(map[string]string{}),
+		SystemReadinessModelGatewayDeps{
+			ModelRepo: fakeReadinessModelCatalogRepo{items: []*model.ModelCatalog{
+				{ModelCode: "mimo-v2.5-pro", EntryKind: "text", Status: status, Visible: visible},
+				{ModelCode: "gpt-image-2", EntryKind: "image", Status: status, Visible: visible},
+				{ModelCode: "sora2", EntryKind: "video", Status: status, Visible: visible},
+			}},
+			SourceRepo: fakeReadinessModelSourceRepo{items: []*model.ModelSourceMapping{
+				{ModelCode: "mimo-v2.5-pro", SourceType: model.ModelSourceTypeAPIChannel, SourceCode: "mimo-official", Status: model.ModelSourceStatusEnabled},
+				{ModelCode: "gpt-image-2", SourceType: model.ModelSourceTypeAPIChannel, SourceCode: "image-official", Status: model.ModelSourceStatusEnabled},
+				{ModelCode: "sora2", SourceType: model.ModelSourceTypeAPIChannel, SourceCode: "video-official", Status: model.ModelSourceStatusEnabled},
+			}},
+			APIRepo: fakeReadinessAPIChannelRepo{
+				channels: map[string]*model.APIChannel{
+					"mimo-official":  healthyReadinessAPIChannel(1, "mimo-official"),
+					"image-official": healthyReadinessAPIChannel(2, "image-official"),
+					"video-official": healthyReadinessAPIChannel(3, "video-official"),
+				},
+				keys: map[uint64][]*model.APIChannelKey{
+					1: {{ID: 11, ChannelID: 1, Status: model.APIChannelKeyStatusEnabled, CredentialEnc: []byte("enc")}},
+					2: {{ID: 21, ChannelID: 2, Status: model.APIChannelKeyStatusEnabled, CredentialEnc: []byte("enc")}},
+					3: {{ID: 31, ChannelID: 3, Status: model.APIChannelKeyStatusEnabled, CredentialEnc: []byte("enc")}},
+				},
+			},
+		},
+	)
+
+	resp, err := svc.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+
+	for _, key := range []string{"catalog", "sources", "api_channel_sources", "source_conflicts", "source_duplicates", "api_channel_health", "api_channel_credentials", "api_channel_key_pool", "kind_image", "kind_text", "kind_video"} {
+		if got := readinessStatus(resp, "model_gateway", key); got != readinessOK {
+			t.Fatalf("model_gateway.%s status = %q, want ok", key, got)
+		}
+	}
+	providerConfigured := readinessCheck(resp, "provider_routes", "configured")
+	if providerConfigured.Status != readinessOK {
+		t.Fatalf("provider_routes.configured status = %q, want ok", providerConfigured.Status)
+	}
+	if !strings.Contains(providerConfigured.Message, "Model Gateway") {
+		t.Fatalf("expected provider_routes message to mention Model Gateway, got %q", providerConfigured.Message)
+	}
+}
+
+func TestSystemReadinessWarnsWhenModelGatewaySourceConflictExists(t *testing.T) {
+	status := int8(model.ModelCatalogStatusEnabled)
+	visible := int8(1)
+	svc := NewSystemReadinessService(
+		validReadinessConfig(),
+		testSystemConfig(map[string]string{}),
+		SystemReadinessModelGatewayDeps{
+			ModelRepo: fakeReadinessModelCatalogRepo{items: []*model.ModelCatalog{
+				{
+					ModelCode:            "mimo-v2.5-pro",
+					EntryKind:            "text",
+					ProviderHint:         "mimo",
+					UpstreamDefaultModel: "mimo-v2.5-pro",
+					Status:               status,
+					Visible:              visible,
+				},
+			}},
+			SourceRepo: fakeReadinessModelSourceRepo{items: []*model.ModelSourceMapping{
+				{
+					ModelCode:     "mimo-v2.5-pro",
+					SourceType:    model.ModelSourceTypeAccountPool,
+					SourceCode:    model.ProviderGPT,
+					UpstreamModel: "mimo-v2.5-pro",
+					Status:        model.ModelSourceStatusEnabled,
+				},
+			}},
+		},
+	)
+
+	resp, err := svc.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+
+	check := readinessCheck(resp, "model_gateway", "source_conflicts")
+	if check.Status != readinessWarn {
+		t.Fatalf("model_gateway.source_conflicts status = %q, want warn", check.Status)
+	}
+	if !strings.Contains(check.Message, "mimo-v2.5-pro") {
+		t.Fatalf("expected source conflict message to mention model, got %q", check.Message)
+	}
+}
+
+func TestSystemReadinessWarnsWhenModelGatewaySourceDuplicateExists(t *testing.T) {
+	status := int8(model.ModelCatalogStatusEnabled)
+	visible := int8(1)
+	svc := NewSystemReadinessService(
+		validReadinessConfig(),
+		testSystemConfig(map[string]string{}),
+		SystemReadinessModelGatewayDeps{
+			ModelRepo: fakeReadinessModelCatalogRepo{items: []*model.ModelCatalog{
+				{
+					ModelCode:            "mimo-v2.5-pro",
+					EntryKind:            "text",
+					ProviderHint:         "mimo",
+					UpstreamDefaultModel: "mimo-v2.5-pro",
+					Status:               status,
+					Visible:              visible,
+				},
+			}},
+			SourceRepo: fakeReadinessModelSourceRepo{items: []*model.ModelSourceMapping{
+				{
+					ID:         101,
+					ModelCode:  "mimo-v2.5-pro",
+					SourceType: model.ModelSourceTypeAPIChannel,
+					SourceCode: "mimo-official",
+					Adapter:    model.APIChannelAdapterOpenAIChat,
+					AuthType:   model.AuthTypeAPIKey,
+					Status:     model.ModelSourceStatusEnabled,
+				},
+				{
+					ID:            102,
+					ModelCode:     "mimo-v2.5-pro",
+					SourceType:    model.ModelSourceTypeAPIChannel,
+					SourceCode:    "mimo-official",
+					UpstreamModel: "mimo-v2.5-pro",
+					Adapter:       model.APIChannelAdapterOpenAIChat,
+					AuthType:      model.AuthTypeAPIKey,
+					Status:        model.ModelSourceStatusDisabled,
+				},
+			}},
+			APIRepo: fakeReadinessAPIChannelRepo{
+				channels: map[string]*model.APIChannel{
+					"mimo-official": healthyReadinessAPIChannel(1, "mimo-official"),
+				},
+				keys: map[uint64][]*model.APIChannelKey{
+					1: {{ID: 11, ChannelID: 1, Status: model.APIChannelKeyStatusEnabled, CredentialEnc: []byte("enc")}},
+				},
+			},
+		},
+	)
+
+	resp, err := svc.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+
+	check := readinessCheck(resp, "model_gateway", "source_duplicates")
+	if check.Status != readinessWarn {
+		t.Fatalf("model_gateway.source_duplicates status = %q, want warn", check.Status)
+	}
+	if !strings.Contains(check.Message, "ID 101 与 102") {
+		t.Fatalf("expected source duplicate message to mention duplicate IDs, got %q", check.Message)
+	}
+}
+
+func TestSystemReadinessWarnsWhenAPIChannelSourceIsNotOperational(t *testing.T) {
+	status := int8(model.ModelCatalogStatusEnabled)
+	visible := int8(1)
+	failedAt := time.Now()
+	svc := NewSystemReadinessService(
+		validReadinessConfig(),
+		testSystemConfig(map[string]string{}),
+		SystemReadinessModelGatewayDeps{
+			ModelRepo: fakeReadinessModelCatalogRepo{items: []*model.ModelCatalog{
+				{ModelCode: "mimo-v2.5-pro", EntryKind: "text", Status: status, Visible: visible},
+			}},
+			SourceRepo: fakeReadinessModelSourceRepo{items: []*model.ModelSourceMapping{
+				{ModelCode: "mimo-v2.5-pro", SourceType: model.ModelSourceTypeAPIChannel, SourceCode: "mimo-official", Status: model.ModelSourceStatusEnabled},
+			}},
+			APIRepo: fakeReadinessAPIChannelRepo{
+				channels: map[string]*model.APIChannel{
+					"mimo-official": {
+						ID:             1,
+						Code:           "mimo-official",
+						Status:         model.APIChannelStatusEnabled,
+						LastTestAt:     &failedAt,
+						LastTestStatus: 2,
+					},
+				},
+				keys: map[uint64][]*model.APIChannelKey{
+					1: {{ID: 11, ChannelID: 1, Status: model.APIChannelKeyStatusEnabled}},
+				},
+			},
+		},
+	)
+
+	resp, err := svc.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if got := readinessStatus(resp, "model_gateway", "api_channel_health"); got != readinessWarn {
+		t.Fatalf("model_gateway.api_channel_health status = %q, want warn", got)
+	}
+	if got := readinessStatus(resp, "model_gateway", "api_channel_credentials"); got != readinessWarn {
+		t.Fatalf("model_gateway.api_channel_credentials status = %q, want warn", got)
+	}
+	if got := readinessStatus(resp, "model_gateway", "api_channel_key_pool"); got != readinessWarn {
+		t.Fatalf("model_gateway.api_channel_key_pool status = %q, want warn", got)
+	}
+}
+
+func TestSystemReadinessWarnsWhenAPIChannelStillUsesLegacyCredential(t *testing.T) {
+	status := int8(model.ModelCatalogStatusEnabled)
+	visible := int8(1)
+	ch := healthyReadinessAPIChannel(1, "mimo-official")
+	ch.CredentialEnc = []byte("legacy")
+	svc := NewSystemReadinessService(
+		validReadinessConfig(),
+		testSystemConfig(map[string]string{}),
+		SystemReadinessModelGatewayDeps{
+			ModelRepo: fakeReadinessModelCatalogRepo{items: []*model.ModelCatalog{
+				{ModelCode: "mimo-v2.5-pro", EntryKind: "text", Status: status, Visible: visible},
+			}},
+			SourceRepo: fakeReadinessModelSourceRepo{items: []*model.ModelSourceMapping{
+				{ModelCode: "mimo-v2.5-pro", SourceType: model.ModelSourceTypeAPIChannel, SourceCode: "mimo-official", Status: model.ModelSourceStatusEnabled},
+			}},
+			APIRepo: fakeReadinessAPIChannelRepo{
+				channels: map[string]*model.APIChannel{"mimo-official": ch},
+			},
+		},
+	)
+
+	resp, err := svc.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if got := readinessStatus(resp, "model_gateway", "api_channel_credentials"); got != readinessOK {
+		t.Fatalf("model_gateway.api_channel_credentials status = %q, want ok", got)
+	}
+	if got := readinessStatus(resp, "model_gateway", "api_channel_key_pool"); got != readinessWarn {
+		t.Fatalf("model_gateway.api_channel_key_pool status = %q, want warn", got)
+	}
+}
+
+func TestSystemReadinessWarnsWhenModelGatewayModelHasNoSource(t *testing.T) {
+	status := int8(model.ModelCatalogStatusEnabled)
+	visible := int8(1)
+	svc := NewSystemReadinessService(
+		validReadinessConfig(),
+		testSystemConfig(map[string]string{}),
+		SystemReadinessModelGatewayDeps{
+			ModelRepo: fakeReadinessModelCatalogRepo{items: []*model.ModelCatalog{
+				{ModelCode: "mimo-v2.5-pro", EntryKind: "text", Status: status, Visible: visible},
+			}},
+			SourceRepo: fakeReadinessModelSourceRepo{},
+		},
+	)
+
+	resp, err := svc.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if got := readinessStatus(resp, "model_gateway", "sources"); got != readinessWarn {
+		t.Fatalf("model_gateway.sources status = %q, want warn", got)
+	}
+	if got := readinessStatus(resp, "model_gateway", "kind_text"); got != readinessWarn {
+		t.Fatalf("model_gateway.kind_text status = %q, want warn", got)
+	}
+	if got := readinessStatus(resp, "provider_routes", "configured"); got != readinessWarn {
+		t.Fatalf("provider_routes.configured status = %q, want warn when Model Gateway has no source mapping", got)
 	}
 }
 
@@ -143,6 +410,126 @@ func testSystemConfig(values map[string]string) *SystemConfigService {
 		loaded: time.Now(),
 		ttl:    time.Hour,
 	}
+}
+
+type fakeReadinessModelCatalogRepo struct {
+	items []*model.ModelCatalog
+	err   error
+}
+
+func (f fakeReadinessModelCatalogRepo) List(ctx context.Context, filter repo.ModelCatalogListFilter) ([]*model.ModelCatalog, int64, error) {
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	filtered := make([]*model.ModelCatalog, 0, len(f.items))
+	for _, item := range f.items {
+		if item == nil {
+			continue
+		}
+		if filter.EntryKind != "" && item.EntryKind != filter.EntryKind {
+			continue
+		}
+		if filter.Status != nil && item.Status != *filter.Status {
+			continue
+		}
+		if filter.Visible != nil && item.Visible != *filter.Visible {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return pageReadinessItems(filtered, filter.Page, filter.PageSize), int64(len(filtered)), nil
+}
+
+type fakeReadinessModelSourceRepo struct {
+	items []*model.ModelSourceMapping
+	err   error
+}
+
+func (f fakeReadinessModelSourceRepo) List(ctx context.Context, filter repo.ModelSourceListFilter) ([]*model.ModelSourceMapping, int64, error) {
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	filtered := make([]*model.ModelSourceMapping, 0, len(f.items))
+	for _, item := range f.items {
+		if item == nil {
+			continue
+		}
+		if filter.ModelCode != "" && item.ModelCode != filter.ModelCode {
+			continue
+		}
+		if filter.SourceType != "" && item.SourceType != filter.SourceType {
+			continue
+		}
+		if filter.Status != nil && item.Status != *filter.Status {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return pageReadinessItems(filtered, filter.Page, filter.PageSize), int64(len(filtered)), nil
+}
+
+type fakeReadinessAPIChannelRepo struct {
+	channels map[string]*model.APIChannel
+	keys     map[uint64][]*model.APIChannelKey
+	err      error
+	keyErr   error
+}
+
+func (f fakeReadinessAPIChannelRepo) GetByCode(ctx context.Context, code string) (*model.APIChannel, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	item := f.channels[code]
+	if item == nil {
+		return nil, repo.ErrNotFound
+	}
+	return item, nil
+}
+
+func (f fakeReadinessAPIChannelRepo) ListKeys(ctx context.Context, filter repo.APIChannelKeyListFilter) ([]*model.APIChannelKey, int64, error) {
+	if f.keyErr != nil {
+		return nil, 0, f.keyErr
+	}
+	filtered := make([]*model.APIChannelKey, 0, len(f.keys[filter.ChannelID]))
+	for _, item := range f.keys[filter.ChannelID] {
+		if item == nil {
+			continue
+		}
+		if filter.Status != nil && item.Status != *filter.Status {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return pageReadinessItems(filtered, filter.Page, filter.PageSize), int64(len(filtered)), nil
+}
+
+func healthyReadinessAPIChannel(id uint64, code string) *model.APIChannel {
+	now := time.Now()
+	return &model.APIChannel{
+		ID:             id,
+		Code:           code,
+		Status:         model.APIChannelStatusEnabled,
+		LastTestAt:     &now,
+		LastTestStatus: 1,
+	}
+}
+
+func pageReadinessItems[T any](items []T, page, pageSize int) []T {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = len(items)
+	}
+	start := (page - 1) * pageSize
+	if start >= len(items) {
+		return []T{}
+	}
+	end := start + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end]
 }
 
 func readinessStatus(resp *dto.AdminSystemReadinessResp, category, key string) string {

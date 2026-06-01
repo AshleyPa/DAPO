@@ -327,6 +327,12 @@ type AdminWalletLogRow struct {
 	UserLabel string `gorm:"column:user_label"`
 }
 
+type TaskBillingProof struct {
+	ConsumeRecord *model.ConsumeRecord
+	WalletLogs    []*model.WalletLog
+	RefundRecords []*model.RefundRecord
+}
+
 func (r *WalletRepo) ListAdminLogs(ctx context.Context, f AdminWalletLogFilter) ([]*AdminWalletLogRow, int64, error) {
 	if f.Page <= 0 {
 		f.Page = 1
@@ -360,6 +366,38 @@ func (r *WalletRepo) ListAdminLogs(ctx context.Context, f AdminWalletLogFilter) 
 		Offset((f.Page - 1) * f.PageSize).Limit(f.PageSize).
 		Scan(&rows).Error
 	return rows, total, err
+}
+
+func (r *WalletRepo) GetTaskBillingProof(ctx context.Context, taskID string) (*TaskBillingProof, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return &TaskBillingProof{}, nil
+	}
+	out := &TaskBillingProof{}
+	var rec model.ConsumeRecord
+	err := r.db.WithContext(ctx).Where("task_id = ?", taskID).First(&rec).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	} else {
+		out.ConsumeRecord = &rec
+	}
+
+	bizIDs := []string{taskID, taskID + ":extra"}
+	if err := r.db.WithContext(ctx).Model(&model.WalletLog{}).
+		Where("biz_type IN ? AND biz_id IN ?", []string{model.BizConsume, model.BizRefund}, bizIDs).
+		Order("id ASC").
+		Find(&out.WalletLogs).Error; err != nil {
+		return nil, err
+	}
+	if err := r.db.WithContext(ctx).Model(&model.RefundRecord{}).
+		Where("task_id = ?", taskID).
+		Order("id ASC").
+		Find(&out.RefundRecords).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // === helpers ===

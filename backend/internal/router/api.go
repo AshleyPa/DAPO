@@ -40,6 +40,9 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 	promptGalleryRepo := repo.NewPromptGalleryRepo(deps.DB)
 	emailCodeRepo := repo.NewEmailVerificationRepo(deps.DB)
 	rechargeRepo := repo.NewRechargeRepo(deps.DB)
+	modelCatalogRepo := repo.NewModelCatalogRepo(deps.DB)
+	modelSourceRepo := repo.NewModelSourceRepo(deps.DB)
+	apiChannelRepo := repo.NewAPIChannelRepo(deps.DB)
 
 	sysCfgSvc := service.NewSystemConfigService(sysCfgRepo)
 	emailVerifier := service.NewEmailVerificationService(emailCodeRepo, userRepo, deps.Cfg.SMTP, sysCfgSvc)
@@ -57,13 +60,13 @@ func MountAPI(r *gin.Engine, deps *bootstrap.Deps) {
 
 	pool := service.NewAccountPool(accountRepo, 30*time.Second)
 	providers := factory.Build()
-	genSvc := service.NewGenerationService(deps.DB, genRepo, pool, billingSvc, providers, service.ConfigPriceFn(sysCfgSvc), deps.AES, proxySvc, sysCfgSvc, routeSvc)
-	chatSvc := service.NewChatService(deps.DB, genRepo, pool, billingSvc, sysCfgSvc, routeSvc, deps.AES, proxySvc)
+	genSvc := service.NewGenerationService(deps.DB, genRepo, pool, billingSvc, providers, service.ModelGatewayPriceFn(sysCfgSvc, modelCatalogRepo), deps.AES, proxySvc, sysCfgSvc, routeSvc, modelCatalogRepo, modelSourceRepo, apiChannelRepo, deps.Limiter)
+	chatSvc := service.NewChatService(deps.DB, genRepo, pool, billingSvc, sysCfgSvc, routeSvc, modelCatalogRepo, modelSourceRepo, apiChannelRepo, deps.AES, proxySvc, deps.Limiter)
 
 	authH := handler.NewAuthHandler(authSvc, userSvc, humanSvc)
 	keyH := handler.NewAPIKeyHandler(keySvc)
 	billH := handler.NewBillingHandler(billingSvc, cdkSvc, rechargeSvc, inviteSvc)
-	genH := handler.NewGenerationHandler(genSvc, chatSvc, genRepo, accountRepo, sysCfgSvc, deps.AES)
+	genH := handler.NewGenerationHandler(genSvc, chatSvc, genRepo, accountRepo, sysCfgSvc, deps.AES, modelCatalogRepo)
 	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc, sysCfgSvc)
 
 	v1.GET("/models", genH.Models)

@@ -35,6 +35,9 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	adminRepo := repo.NewAdminRepo(deps.DB)
 	userRepo := repo.NewUserRepo(deps.DB)
 	accountRepo := repo.NewAccountRepo(deps.DB)
+	apiChannelRepo := repo.NewAPIChannelRepo(deps.DB)
+	modelCatalogRepo := repo.NewModelCatalogRepo(deps.DB)
+	modelSourceRepo := repo.NewModelSourceRepo(deps.DB)
 	walletRepo := repo.NewWalletRepo(deps.DB)
 	generationRepo := repo.NewGenerationRepo(deps.DB)
 	proxyRepo := repo.NewProxyRepo(deps.DB)
@@ -50,6 +53,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	adminAuth := service.NewAdminAuthService(adminRepo, deps.JWT)
 	adminUserSvc := service.NewAdminUserService(userRepo, walletRepo)
 	accountAdmin := service.NewAccountAdminService(accountRepo, pool, deps.AES)
+	modelGatewayAdmin := service.NewModelGatewayAdminService(modelCatalogRepo, modelSourceRepo, apiChannelRepo, accountRepo)
 	billingSvc := service.NewBillingService(deps.DB, walletRepo)
 	cdkSvc := service.NewCDKService(deps.DB, billingSvc)
 	promoSvc := service.NewAdminPromoService(promoRepo)
@@ -57,6 +61,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	routeSvc := service.NewProviderRouteService(sysCfgSvc)
 	providerRouteTestSvc := service.NewProviderRouteTestService(routeSvc, accountRepo)
 	proxySvc := service.NewProxyService(proxyRepo, deps.AES)
+	apiChannelAdmin := service.NewAPIChannelAdminService(apiChannelRepo, deps.AES, proxySvc)
 	proxySubSvc := service.NewProxySubscriptionService(proxyRepo, deps.AES, service.NewMihomoManagerFromEnv())
 	promptGallerySvc := service.NewPromptGalleryService(promptGalleryRepo)
 	openaiOAuth := service.NewOpenAIOAuthService(sysCfgSvc)
@@ -68,13 +73,19 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 	authH := handler.NewAdminAuthHandler(adminAuth, adminRepo)
 	userH := handler.NewAdminUserHandler(adminUserSvc)
 	accountH := handler.NewAdminAccountHandler(accountAdmin, pool)
+	apiChannelH := handler.NewAdminAPIChannelHandler(apiChannelAdmin)
+	modelGatewayH := handler.NewAdminModelGatewayHandler(modelGatewayAdmin)
 	cdkH := handler.NewAdminCDKHandler(cdkSvc)
 	billingH := handler.NewAdminBillingHandler(walletRepo)
 	promoH := handler.NewAdminPromoHandler(promoSvc)
 	proxyH := handler.NewAdminProxyHandler(proxySvc, accountTest, proxySubSvc)
-	sysH := handler.NewAdminSystemHandler(sysCfgSvc, deps.Cfg)
+	sysH := handler.NewAdminSystemHandler(sysCfgSvc, deps.Cfg, service.SystemReadinessModelGatewayDeps{
+		ModelRepo:  modelCatalogRepo,
+		SourceRepo: modelSourceRepo,
+		APIRepo:    apiChannelRepo,
+	})
 	providerRouteH := handler.NewAdminProviderRouteHandler(providerRouteTestSvc)
-	logH := handler.NewAdminLogHandler(generationRepo, accountRepo, deps.AES)
+	logH := handler.NewAdminLogHandler(generationRepo, accountRepo, deps.AES, walletRepo)
 	dashboardH := handler.NewAdminDashboardHandler(dashboardRepo)
 	promptGalleryH := handler.NewPromptGalleryHandler(promptGallerySvc, sysCfgSvc)
 
@@ -121,6 +132,37 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 			acc.POST("/:id/test", accountH.Test)
 			acc.POST("/:id/refresh", accountH.RefreshOAuth)
 			acc.GET("/:id/secrets", accountH.Secrets)
+		}
+
+		apiChannels := authed.Group("/api-channels")
+		apiChannels.Use(superOnly)
+		{
+			apiChannels.GET("", apiChannelH.List)
+			apiChannels.POST("", apiChannelH.Create)
+			apiChannels.PUT("/:id", apiChannelH.Update)
+			apiChannels.DELETE("/:id", apiChannelH.Delete)
+			apiChannels.POST("/:id/test", apiChannelH.Test)
+			apiChannels.GET("/:id/secrets", apiChannelH.Secrets)
+			apiChannels.GET("/:id/keys", apiChannelH.ListKeys)
+			apiChannels.POST("/:id/keys", apiChannelH.CreateKey)
+			apiChannels.PUT("/:id/keys/:key_id", apiChannelH.UpdateKey)
+			apiChannels.DELETE("/:id/keys/:key_id", apiChannelH.DeleteKey)
+		}
+
+		modelGateway := authed.Group("/model-gateway")
+		modelGateway.Use(superOnly)
+		{
+			modelGateway.GET("/models", modelGatewayH.ListModels)
+			modelGateway.POST("/models", modelGatewayH.CreateModel)
+			modelGateway.PUT("/models/:id", modelGatewayH.UpdateModel)
+			modelGateway.DELETE("/models/:id", modelGatewayH.DeleteModel)
+			modelGateway.GET("/sources", modelGatewayH.ListSources)
+			modelGateway.GET("/source-conflicts", modelGatewayH.ListSourceConflicts)
+			modelGateway.GET("/audit", logH.ModelGatewayAudit)
+			modelGateway.POST("/sources", modelGatewayH.CreateSource)
+			modelGateway.PUT("/sources/:id", modelGatewayH.UpdateSource)
+			modelGateway.DELETE("/sources/:id", modelGatewayH.DeleteSource)
+			modelGateway.POST("/dry-run", modelGatewayH.DryRun)
 		}
 
 		// 代理管理：CRUD + 连通性测试
@@ -199,6 +241,7 @@ func MountAdmin(r *gin.Engine, deps *bootstrap.Deps) *service.AccountPool {
 			logs.GET("/upstream-failures", logH.UpstreamFailures)
 			logs.GET("/generations/:task_id/preview", logH.GenerationPreview)
 			logs.GET("/generations/:task_id/upstream", logH.GenerationUpstreamLogs)
+			logs.GET("/generations/:task_id/billing", logH.GenerationBillingProof)
 			logs.DELETE("/generations", logH.PurgeGenerationLogs)
 		}
 	}

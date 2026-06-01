@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { AlertTriangle, ClipboardList, GitBranch, Globe2, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import { ApiError } from '../../lib/api';
 import { systemApi } from '../../lib/services';
@@ -18,12 +19,14 @@ interface PriceRow {
   enabled: boolean;
 }
 
+type ImageResolution = '1K' | '2K' | '4K';
+
 interface ImagePriceRuleRow {
   model_code: string;
   mode: 't2i' | 'i2i';
   ratio_group: 'standard' | 'extended';
   ratios: string[];
-  resolution: '1K' | '2K' | '4K';
+  resolution: ImageResolution;
   unit_points: number;
   enabled: boolean;
 }
@@ -41,6 +44,7 @@ const DEFAULT_ROWS: PriceRow[] = [
 
 const STANDARD_IMAGE_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '5:4', '4:5'];
 const EXTENDED_IMAGE_RATIOS = ['3:2', '2:3', '21:9'];
+const IMAGE_RESOLUTIONS: ImageResolution[] = ['1K', '2K', '4K'];
 
 const DEFAULT_IMAGE_PRICE_RULES: ImagePriceRuleRow[] = [
   { model_code: 'gpt-image-2', mode: 't2i', ratio_group: 'standard', ratios: STANDARD_IMAGE_RATIOS, resolution: '1K', unit_points: 4, enabled: true },
@@ -116,12 +120,68 @@ function imageRulesFromValue(v: unknown): ImagePriceRuleRow[] {
   return rows.length ? rows : DEFAULT_IMAGE_PRICE_RULES;
 }
 
+interface ImageMatrixGroup {
+  key: string;
+  model_code: string;
+  mode: ImagePriceRuleRow['mode'];
+  ratio_group: ImagePriceRuleRow['ratio_group'];
+  ratios: string[];
+  prices: Partial<Record<ImageResolution, number>>;
+  enabled: boolean;
+}
+
+function buildDefaultImageMatrix(modelCode: string) {
+  return DEFAULT_IMAGE_PRICE_RULES.map((row) => ({ ...row, model_code: modelCode }));
+}
+
+function buildImageMatrixGroups(rows: ImagePriceRuleRow[]): ImageMatrixGroup[] {
+  const groups = new Map<string, ImageMatrixGroup>();
+  rows.forEach((row) => {
+    const key = [
+      row.model_code.trim(),
+      row.mode,
+      row.ratio_group,
+    ].join('|');
+    const fallbackRatios = row.ratio_group === 'extended' ? EXTENDED_IMAGE_RATIOS : STANDARD_IMAGE_RATIOS;
+    const group = groups.get(key) ?? {
+      key,
+      model_code: row.model_code,
+      mode: row.mode,
+      ratio_group: row.ratio_group,
+      ratios: row.ratios.length ? row.ratios : fallbackRatios,
+      prices: {},
+      enabled: false,
+    };
+    group.prices[row.resolution] = row.unit_points;
+    group.enabled = group.enabled || row.enabled;
+    groups.set(key, group);
+  });
+  return Array.from(groups.values()).sort((a, b) => {
+    const modelCompare = a.model_code.localeCompare(b.model_code);
+    if (modelCompare !== 0) return modelCompare;
+    const modeCompare = a.mode.localeCompare(b.mode);
+    if (modeCompare !== 0) return modeCompare;
+    return a.ratio_group.localeCompare(b.ratio_group);
+  });
+}
+
+function imageModeLabel(mode: ImagePriceRuleRow['mode']) {
+  return mode === 'i2i' ? '图生图' : '文生图';
+}
+
+function ratioGroupLabel(group: ImagePriceRuleRow['ratio_group']) {
+  return group === 'extended' ? '扩展比例' : '常规比例';
+}
+
 export default function ModelPricesPage() {
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: ['admin', 'system', 'settings'], queryFn: () => systemApi.get() });
   const [rows, setRows] = useState<PriceRow[]>(DEFAULT_ROWS);
   const [imageRules, setImageRules] = useState<ImagePriceRuleRow[]>(DEFAULT_IMAGE_PRICE_RULES);
+  const [imageMatrixModelCode, setImageMatrixModelCode] = useState('gpt-image-2');
   const [dirty, setDirty] = useState(false);
+  const imageMatrixGroups = useMemo(() => buildImageMatrixGroups(imageRules), [imageRules]);
+  const gatewayLikeRows = useMemo(() => rows.filter(isGatewayLikeLegacyPriceRow), [rows]);
 
   useEffect(() => {
     if (settings.data) {
@@ -148,6 +208,39 @@ export default function ModelPricesPage() {
     setDirty(true);
   };
 
+  const setImageMatrixPrice = (group: ImageMatrixGroup, resolution: ImageResolution, unitPoints: number) => {
+    setImageRules((old) => {
+      const idx = old.findIndex((row) => (
+        row.model_code === group.model_code
+        && row.mode === group.mode
+        && row.ratio_group === group.ratio_group
+        && row.resolution === resolution
+      ));
+      if (idx >= 0) {
+        return old.map((row, i) => (i === idx ? { ...row, unit_points: unitPoints } : row));
+      }
+      return [...old, {
+        model_code: group.model_code,
+        mode: group.mode,
+        ratio_group: group.ratio_group,
+        ratios: group.ratios,
+        resolution,
+        unit_points: unitPoints,
+        enabled: true,
+      }];
+    });
+    setDirty(true);
+  };
+
+  const applyDefaultImageMatrix = () => {
+    const modelCode = imageMatrixModelCode.trim() || 'gpt-image-2';
+    setImageRules((old) => [
+      ...old.filter((row) => row.model_code.trim().toLowerCase() !== modelCode.toLowerCase()),
+      ...buildDefaultImageMatrix(modelCode),
+    ]);
+    setDirty(true);
+  };
+
   const save = useMutation({
     mutationFn: () => systemApi.update({
       'billing.model_prices': rows.map((row) => ({
@@ -168,7 +261,7 @@ export default function ModelPricesPage() {
       })),
     }),
     onSuccess: () => {
-      toast.success('模型价格已保存');
+      toast.success('兼容价格已保存');
       setDirty(false);
       qc.invalidateQueries({ queryKey: ['admin', 'system'] });
     },
@@ -179,8 +272,8 @@ export default function ModelPricesPage() {
     <div className="page page-wide space-y-4">
       <header className="page-header">
         <div>
-          <h1 className="page-title">模型价格</h1>
-          <p className="page-subtitle">维护模型编码、上游模型映射、供应商和扣费单价</p>
+          <h1 className="page-title">兼容模型价格</h1>
+          <p className="page-subtitle">仅维护旧系统配置 billing.model_prices / billing.image_price_rules；新模型的展示、路由和价格请优先在模型库配置。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button className="btn btn-outline btn-md" onClick={() => settings.refetch()} disabled={settings.isFetching}>
@@ -192,15 +285,17 @@ export default function ModelPricesPage() {
         </div>
       </header>
 
+      <LegacyPriceNotice gatewayLikeRows={gatewayLikeRows} />
+
       <div className="card table-wrap">
         <table className="data-table">
           <thead>
             <tr>
-              <th>模型编码</th>
+              <th>旧模型编码</th>
               <th>显示名称</th>
               <th>类型</th>
-              <th>供应商</th>
-              <th>上游模型映射</th>
+              <th>旧供应商</th>
+              <th>旧上游模型映射</th>
               <th>单价（点）</th>
               <th>输入/输出（点/千Token）</th>
               <th>状态</th>
@@ -251,8 +346,8 @@ export default function ModelPricesPage() {
       <div className="card space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-h4 font-semibold text-text-primary">图片价格矩阵</h2>
-            <p className="text-small text-text-tertiary mt-1">按生成模式、比例组和分辨率维护单张扣费。前台预估和后端预扣都会读取这里。</p>
+            <h2 className="text-h4 font-semibold text-text-primary">兼容图片价格矩阵</h2>
+            <p className="mt-1 text-small text-text-tertiary">仅作为模型库没有有效图片矩阵时的兜底。新图片模型请在模型库的价格矩阵维护。</p>
           </div>
           <button
             className="btn btn-outline btn-sm"
@@ -263,6 +358,52 @@ export default function ModelPricesPage() {
           >
             恢复默认梯度
           </button>
+        </div>
+        <div className="flex flex-wrap items-end gap-2 rounded-md border border-border bg-surface-2 p-3">
+          <label className="field min-w-[240px]">
+            <span className="field-label">快速覆盖模型</span>
+            <input className="input" value={imageMatrixModelCode} onChange={(e) => setImageMatrixModelCode(e.target.value)} placeholder="gpt-image-2" />
+          </label>
+          <button className="btn btn-outline btn-md" onClick={applyDefaultImageMatrix}>
+            <Plus size={16} /> 生成完整图片梯度
+          </button>
+          <div className="text-small text-text-tertiary">会覆盖同模型现有图片规则，并一次生成文生图/图生图 × 常规/扩展 × 1K/2K/4K。</div>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table min-w-[820px]">
+            <thead>
+              <tr>
+                <th>模型 / 场景</th>
+                <th>覆盖比例</th>
+                {IMAGE_RESOLUTIONS.map((resolution) => <th key={resolution}>{resolution}（点）</th>)}
+                <th>组状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {imageMatrixGroups.map((group) => (
+                <tr key={group.key}>
+                  <td>
+                    <div className="font-semibold text-text-primary">{group.model_code}</div>
+                    <div className="mt-1 text-tiny text-text-tertiary">{imageModeLabel(group.mode)} · {ratioGroupLabel(group.ratio_group)}</div>
+                  </td>
+                  <td className="max-w-[280px] text-small text-text-secondary">{group.ratios.join(', ')}</td>
+                  {IMAGE_RESOLUTIONS.map((resolution) => (
+                    <td key={resolution}>
+                      <input
+                        className="input w-[96px]"
+                        type="number"
+                        min={0}
+                        step={0.5}
+                        value={group.prices[resolution] ?? ''}
+                        onChange={(e) => setImageMatrixPrice(group, resolution, Number(e.target.value) || 0)}
+                      />
+                    </td>
+                  ))}
+                  <td>{group.enabled ? '有启用规则' : '全部停用'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
         <div className="table-wrap">
           <table className="data-table">
@@ -346,4 +487,51 @@ export default function ModelPricesPage() {
       </button>
     </div>
   );
+}
+
+function LegacyPriceNotice({ gatewayLikeRows }: { gatewayLikeRows: PriceRow[] }) {
+  return (
+    <section className="rounded-md border border-amber-200 bg-amber-50 p-4 text-amber-950">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+          <div className="min-w-0">
+            <div className="text-small font-semibold">这是旧价格兼容页，不负责 Model Gateway 路由</div>
+            <p className="mt-1 text-small leading-relaxed text-amber-900">
+              在这里新增 MiMo、DeepSeek 或其他 OpenAI-compatible 模型，只会影响旧价格兜底；不会创建 API 渠道、不会绑定来源映射，也不会阻止系统继续尝试错误账号池。新模型请走“API 渠道、模型库、模型审计”。
+            </p>
+            {gatewayLikeRows.length > 0 && (
+              <div className="mt-3 rounded-md border border-amber-200 bg-white/70 p-3 text-small">
+                <div className="font-semibold">检测到疑似新网关模型仍在旧价格表中</div>
+                <div className="mt-1 break-words font-mono text-tiny text-amber-800">
+                  {gatewayLikeRows.slice(0, 8).map((row) => row.model_code || row.name || row.upstream_model).join(', ')}
+                  {gatewayLikeRows.length > 8 ? ` +${gatewayLikeRows.length - 8}` : ''}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Link className="btn btn-outline btn-sm bg-white/80" to="/api-channels">
+            <Globe2 size={14} /> API 渠道
+          </Link>
+          <Link className="btn btn-outline btn-sm bg-white/80" to="/model-gateway">
+            <GitBranch size={14} /> 模型库
+          </Link>
+          <Link className="btn btn-outline btn-sm bg-white/80" to="/model-gateway-audit">
+            <ClipboardList size={14} /> 模型审计
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function isGatewayLikeLegacyPriceRow(row: PriceRow) {
+  const provider = row.provider.trim().toLowerCase();
+  const text = `${row.model_code} ${row.name} ${row.upstream_model} ${provider}`.toLowerCase();
+  if (/(mimo|deepseek|openai-compatible|openai_compatible|official|api channel|api_channel)/.test(text)) {
+    return true;
+  }
+  return row.kind === 'text' && provider !== '' && provider !== 'gpt' && provider !== 'grok';
 }

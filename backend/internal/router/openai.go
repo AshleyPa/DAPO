@@ -44,6 +44,9 @@ func MountOpenAI(r *gin.Engine, deps *bootstrap.Deps) {
 	genRepo := repo.NewGenerationRepo(deps.DB)
 	sysCfgRepo := repo.NewSystemConfigRepo(deps.DB)
 	proxyRepo := repo.NewProxyRepo(deps.DB)
+	modelCatalogRepo := repo.NewModelCatalogRepo(deps.DB)
+	modelSourceRepo := repo.NewModelSourceRepo(deps.DB)
+	apiChannelRepo := repo.NewAPIChannelRepo(deps.DB)
 
 	keySvc := service.NewAPIKeyService(apiKeyRepo)
 	billingSvc := service.NewBillingService(deps.DB, walletRepo)
@@ -52,9 +55,9 @@ func MountOpenAI(r *gin.Engine, deps *bootstrap.Deps) {
 	routeSvc := service.NewProviderRouteService(sysCfgSvc)
 	pool := service.NewAccountPool(accountRepo, 30*time.Second)
 	providers := factory.Build()
-	genSvc := service.NewGenerationService(deps.DB, genRepo, pool, billingSvc, providers, service.ConfigPriceFn(sysCfgSvc), deps.AES, proxySvc, sysCfgSvc, routeSvc)
-	chatSvc := service.NewChatService(deps.DB, genRepo, pool, billingSvc, sysCfgSvc, routeSvc, deps.AES, proxySvc)
-	openaiH := handler.NewOpenAIHandler(genSvc, chatSvc, genRepo)
+	genSvc := service.NewGenerationService(deps.DB, genRepo, pool, billingSvc, providers, service.ModelGatewayPriceFn(sysCfgSvc, modelCatalogRepo), deps.AES, proxySvc, sysCfgSvc, routeSvc, modelCatalogRepo, modelSourceRepo, apiChannelRepo, deps.Limiter)
+	chatSvc := service.NewChatService(deps.DB, genRepo, pool, billingSvc, sysCfgSvc, routeSvc, modelCatalogRepo, modelSourceRepo, apiChannelRepo, deps.AES, proxySvc, deps.Limiter)
+	openaiH := handler.NewOpenAIHandler(genSvc, chatSvc, genRepo, modelCatalogRepo)
 
 	guard := v1.Group("/")
 	guard.Use(middleware.AuthAPIKey(keySvc))

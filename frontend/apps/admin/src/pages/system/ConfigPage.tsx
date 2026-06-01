@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, CheckCircle2, Cloud, CreditCard, Database, GitBranch, Mail, RefreshCw, Save, ShieldAlert, ShieldCheck, Trash2, XCircle } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 
 import { ApiError } from '../../lib/api';
 import { providerRoutesApi, proxiesApi, systemApi } from '../../lib/services';
@@ -336,7 +337,8 @@ export default function ConfigPage() {
             <TextField label="允许域名" value={form.turnstile_allowed_hostnames} onChange={(v) => set('turnstile_allowed_hostnames', v)} placeholder="www.dapo-ai.com, wtvdaonwgoaa.usw-1.sealos.app" />
           </Section>
 
-          <Section className="2xl:col-span-2" icon={<GitBranch size={18} />} title="模型路由" desc="配置图片、文字、视频模型进入哪个上游账号池，并控制轮询策略和认证类型。">
+          <Section className="2xl:col-span-2" icon={<GitBranch size={18} />} title="账号池兼容路由" desc="保留 GPT / Grok 逆向账号池的旧 provider.routes 配置；官方 API 与多渠道模型优先在模型库中管理。">
+            <LegacyProviderRoutesNotice />
             <ProviderRoutesEditor value={form.provider_routes} onChange={(v) => set('provider_routes', v)} />
             <ProviderRouteDryRunPanel
               value={routeTest}
@@ -492,7 +494,7 @@ function ReadinessPanel({
           <div>
             <h2 className="text-h5 font-semibold text-text-primary">上线配置体检 · {title}</h2>
             <p className="text-small text-text-tertiary mt-0.5">
-              只读检查 SMTP、支付宝、Provider 路由和存储配置，不会发送邮件、不会请求支付网关、不会暴露密钥。
+              只读检查 SMTP、支付宝、Model Gateway、账号池兼容路由和存储配置，不会发送邮件、不会请求支付网关、不会暴露密钥。
               {data?.refreshed_at ? ` 刷新于 ${formatUnix(data.refreshed_at)}` : ''}
             </p>
           </div>
@@ -577,8 +579,10 @@ function readinessCategoryLabel(category: string) {
       return '人机验证';
     case 'payment':
       return '支付宝支付';
+    case 'model_gateway':
+      return 'Model Gateway';
     case 'provider_routes':
-      return 'Provider 路由';
+      return '账号池兼容路由';
     case 'storage':
       return '存储';
     default:
@@ -603,6 +607,26 @@ function Section({ icon, title, desc, children, className = '' }: { icon: ReactN
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="field"><span className="field-label">{label}</span>{children}</label>;
+}
+
+function LegacyProviderRoutesNotice() {
+  return (
+    <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-small text-text-secondary">
+      <div className="mb-2 flex items-center gap-2 font-semibold text-warning">
+        <AlertTriangle size={15} />
+        仅用于旧账号池兜底
+      </div>
+      <div className="leading-relaxed">
+        MiMo、DeepSeek、OpenAI-compatible API 和多 Key 渠道不要配置在这里；请在
+        <Link className="mx-1 font-semibold text-primary hover:underline" to="/api-channels">API 渠道</Link>
+        创建接口来源，再到
+        <Link className="mx-1 font-semibold text-primary hover:underline" to="/model-gateway">模型库</Link>
+        绑定模型来源。真实调用后可在
+        <Link className="mx-1 font-semibold text-primary hover:underline" to="/model-gateway-audit">模型审计</Link>
+        查看 route snapshot、扣费依据和上游日志。
+      </div>
+    </div>
+  );
 }
 
 function TextField({ label, value, onChange, placeholder, type = 'text' }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string }) {
@@ -633,8 +657,8 @@ function ProviderRouteDryRunPanel({
     <div className="rounded-md border border-border bg-surface-2 p-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-small font-semibold text-text-primary">路由测试</div>
-          <div className="text-small text-text-tertiary">Dry-run 当前模型会命中的 provider、上游模型和账号池可承接数量。</div>
+          <div className="text-small font-semibold text-text-primary">账号池路由测试</div>
+          <div className="text-small text-text-tertiary">Dry-run 旧 provider.routes 会命中的账号池、上游模型和可承接账号数量；API 渠道请到模型库测试。</div>
         </div>
         <button type="button" className="btn btn-outline btn-sm" disabled={loading || !value.model_code.trim()} onClick={onSubmit}>
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> {loading ? '测试中...' : '测试路由'}

@@ -8,6 +8,9 @@ const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
 const DashboardPage = lazy(() => import('./pages/dashboard/DashboardPage'));
 const TokenAccountsPage = lazy(() => import('./pages/accounts/TokenAccountsPage'));
 const ProxiesPage = lazy(() => import('./pages/proxies/ProxiesPage'));
+const APIChannelsPage = lazy(() => import('./pages/system/APIChannelsPage'));
+const ModelGatewayPage = lazy(() => import('./pages/system/ModelGatewayPage'));
+const ModelGatewayAuditPage = lazy(() => import('./pages/system/ModelGatewayAuditPage'));
 const UsersPage = lazy(() => import('./pages/users/UsersPage'));
 const BillingPage = lazy(() => import('./pages/billing/BillingPage'));
 const PromoPage = lazy(() => import('./pages/promo/PromoPage'));
@@ -30,6 +33,9 @@ export default function App() {
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard"  element={<DashboardPage />} />
               <Route path="/accounts"   element={<TokenAccountsPage />} />
+              <Route path="/api-channels" element={<APIChannelsPage />} />
+              <Route path="/model-gateway" element={<ModelGatewayPage />} />
+              <Route path="/model-gateway-audit" element={<ModelGatewayAuditPage />} />
               <Route path="/proxies"    element={<ProxiesPage />} />
               <Route path="/users"      element={<UsersPage />} />
               <Route path="/billing"    element={<BillingPage />} />

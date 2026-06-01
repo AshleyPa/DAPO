@@ -51,7 +51,6 @@ const GENERATING_PHRASES = [
 const IMAGE_MODELS = [
   { code: 'gpt-image-2', label: 'GPT Image 2', cost: 4, imagePriceRules: defaultImagePriceRules() },
 ];
-const PRIMARY_IMAGE_MODEL_CODES = new Set(['gpt-image-2']);
 
 type SelectModel = {
   code: string;
@@ -59,7 +58,22 @@ type SelectModel = {
   cost?: number;
   input?: number;
   output?: number;
+  pricingMode?: PublicModel['pricing_mode'];
+  capabilities?: string[];
+  parametersSchema?: unknown;
   imagePriceRules?: ImagePriceRule[];
+};
+
+type ModelParameterControl = {
+  key: string;
+  label: string;
+  type: 'number' | 'select' | 'boolean' | 'text';
+  defaultValue?: unknown;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: { value: string; label: string }[];
+  modes?: StudioMode[];
 };
 
 type RichEffectTuning = {
@@ -95,15 +109,16 @@ const VIDEO_MODELS = [
 ];
 
 const TEXT_MODELS = [
-  { code: 'grok-4.20-fast', label: 'Grok Fast', input: 1, output: 3 },
-  { code: 'grok-4.20-auto', label: 'Grok Auto', input: 1.5, output: 4.5 },
-  { code: 'grok-4.20-expert', label: 'Grok Expert', input: 2, output: 6 },
-  { code: 'grok-4.20-heavy', label: 'Grok Heavy', input: 4, output: 12 },
-  { code: 'gpt-4o-mini', label: 'GPT 4o mini', input: 1, output: 3 },
+  { code: 'grok-4.20-fast', label: 'Grok Fast', pricingMode: 'token', input: 1, output: 3 },
+  { code: 'grok-4.20-auto', label: 'Grok Auto', pricingMode: 'token', input: 1.5, output: 4.5 },
+  { code: 'grok-4.20-expert', label: 'Grok Expert', pricingMode: 'token', input: 2, output: 6 },
+  { code: 'grok-4.20-heavy', label: 'Grok Heavy', pricingMode: 'token', input: 4, output: 12 },
+  { code: 'gpt-4o-mini', label: 'GPT 4o mini', pricingMode: 'token', input: 1, output: 3 },
 ];
 
 const IMAGE_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9', '5:4', '4:5'] as const;
 const IMAGE_RESOLUTIONS = ['1K', '2K', '4K'] as const;
+const DEFAULT_IMAGE_QUALITY = 'high';
 const VIDEO_RATIOS = ['16:9', '9:16', '1:1'] as const;
 const VIDEO_DURATIONS = [6, 10] as const;
 const HISTORY_PAGE_SIZES = [20, 50, 100] as const;
@@ -272,6 +287,7 @@ export default function CreateStudioPage() {
   const [count, setCount] = useState(1);
   const [duration, setDuration] = useState<(typeof VIDEO_DURATIONS)[number]>(6);
   const [attachments, setAttachments] = useState<Array<{ id: string; name: string; dataUrl: string }>>([]);
+  const [modelParams, setModelParams] = useState<Record<string, unknown>>({});
   const [textResult, setTextResult] = useState('');
   const [task, setTask] = useState<GenerationTask | null>(null);
   const [historyPageSize, setHistoryPageSize] = useState<(typeof HISTORY_PAGE_SIZES)[number]>(20);
@@ -310,6 +326,15 @@ export default function CreateStudioPage() {
     if (videoModels.length && !videoModels.some((m) => m.code === videoModel)) setVideoModel(videoModels[0]!.code);
   }, [imageModel, imageModels, textModel, textModels, videoModel, videoModels]);
 
+  const activeModels = mode === 'video' ? videoModels : mode === 'text' ? textModels : imageModels;
+  const activeModelCode = mode === 'video' ? videoModel : mode === 'text' ? textModel : imageModel;
+  const activeModel = useMemo(() => activeModels.find((m) => m.code === activeModelCode) ?? activeModels[0], [activeModelCode, activeModels]);
+  const parameterControls = useMemo(() => modelParameterControls(activeModel, mode), [activeModel, mode]);
+
+  useEffect(() => {
+    setModelParams((prev) => parameterValuesForControls(parameterControls, prev));
+  }, [activeModelCode, mode, parameterControls]);
+
   useEffect(() => {
     const el = promptRef.current;
     if (!el) return;
@@ -343,20 +368,23 @@ export default function CreateStudioPage() {
       ratio: imageRatio,
       ref_assets: attachments.map((item) => item.dataUrl),
       mode: attachments.length ? 'i2i' : 't2i',
-      params: { resolution: imageResolution, quality: 'high' },
+      params: imageGenerationParams(modelParams, imageResolution),
     }),
     onSuccess: (t) => handleTask(t),
     onError: (e) => toast.error(e instanceof ApiError ? e.message : '生成失败'),
   });
 
   const createVideo = useMutation({
-    mutationFn: () => genApi.createVideo({ model: videoModel, prompt, duration, ratio: videoRatio, quality: 'hd', ref_assets: attachments.map((item) => item.dataUrl), mode: attachments.length ? 'i2v' : 't2v' }),
+    mutationFn: () => genApi.createVideo({ model: videoModel, prompt, duration, ratio: videoRatio, quality: 'hd', ref_assets: attachments.map((item) => item.dataUrl), mode: attachments.length ? 'i2v' : 't2v', params: modelParams }),
     onSuccess: (t) => handleTask(t),
     onError: (e) => toast.error(e instanceof ApiError ? e.message : '生成失败'),
   });
 
   const createText = useMutation({
-    mutationFn: () => genApi.createText({ model: textModel, prompt, max_tokens: 1600, images: attachments.map((item) => item.dataUrl) }),
+    mutationFn: () => {
+      const { maxTokens, params } = textGenerationParams(modelParams);
+      return genApi.createText({ model: textModel, prompt, max_tokens: maxTokens, params, images: attachments.map((item) => item.dataUrl) });
+    },
     onSuccess: async (res) => {
       setTextResult(res.content || '');
       toast.success('文字生成完成');
@@ -375,13 +403,11 @@ export default function CreateStudioPage() {
   }, [history.data?.list, task]);
 
   const expectedCost = mode === 'video'
-    ? Math.round(((videoModels.find((m) => m.code === videoModel)?.cost ?? 20) * duration) / 6)
+    ? Math.round(((activeModel?.cost ?? 20) * duration) / 6)
     : mode === 'text'
-      ? '按实际 Token'
-      : estimateImageCost(imageModels.find((m) => m.code === imageModel), imageRatio, imageResolution, attachments.length > 0 ? 'i2i' : 't2i') * count;
+      ? textCostLabel(activeModel)
+      : estimateImageCost(activeModel, imageRatio, imageResolution, attachments.length > 0 ? 'i2i' : 't2i', imageQualityParam(modelParams)) * count;
   const maxAttachments = mode === 'video' ? VIDEO_MAX_ATTACHMENTS : TEXT_MAX_ATTACHMENTS;
-  const activeModels = mode === 'video' ? videoModels : mode === 'text' ? textModels : imageModels;
-  const activeModelCode = mode === 'video' ? videoModel : mode === 'text' ? textModel : imageModel;
   const activeModelLabel = activeModels.find((m) => m.code === activeModelCode)?.label ?? activeModelCode;
   const isBusy = !!inProgress || createImage.isPending || createVideo.isPending || createText.isPending;
 
@@ -583,7 +609,7 @@ export default function CreateStudioPage() {
                   {mode === 'image' && (
                     <>
                       <ComposerSelect label="比例" ariaLabel="图片比例" value={imageRatio} onChange={(v) => setImageRatio(v as typeof IMAGE_RATIOS[number])} options={IMAGE_RATIOS.map((r) => ({ value: r, label: r }))} />
-                      <ComposerSelect label="清晰度" ariaLabel="图片清晰度" value={imageResolution} onChange={(v) => setImageResolution(v as typeof IMAGE_RESOLUTIONS[number])} options={IMAGE_RESOLUTIONS.map((r) => ({ value: r, label: r }))} />
+                      <ComposerSelect label="尺寸" ariaLabel="图片尺寸" value={imageResolution} onChange={(v) => setImageResolution(v as typeof IMAGE_RESOLUTIONS[number])} options={IMAGE_RESOLUTIONS.map((r) => ({ value: r, label: r }))} />
                       <ComposerSelect label="数量" ariaLabel="图片数量" value={String(count)} onChange={(v) => setCount(Number(v))} options={[1, 2, 4].map((n) => ({ value: String(n), label: `${n}张` }))} />
                     </>
                   )}
@@ -593,6 +619,7 @@ export default function CreateStudioPage() {
                       <ComposerSelect label="时长" ariaLabel="视频时长" value={String(duration)} onChange={(v) => setDuration(Number(v) as typeof VIDEO_DURATIONS[number])} options={VIDEO_DURATIONS.map((n) => ({ value: String(n), label: `${n}s` }))} />
                     </>
                   )}
+                  <ModelParameterControls controls={parameterControls} values={modelParams} onChange={setModelParams} />
                 </div>
                 <div className="flex shrink-0 items-center justify-between gap-2 sm:justify-end">
                   <span className="dapo-cost-chip inline-flex h-10 items-center justify-center rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#475467]">
@@ -1251,6 +1278,83 @@ function ComposerSelect({
   );
 }
 
+function ModelParameterControls({
+  controls,
+  values,
+  onChange,
+}: {
+  controls: ModelParameterControl[];
+  values: Record<string, unknown>;
+  onChange: (values: Record<string, unknown>) => void;
+}) {
+  if (!controls.length) return null;
+  const setValue = (key: string, value: unknown) => onChange({ ...values, [key]: value });
+  return (
+    <>
+      {controls.map((control) => {
+        const value = values[control.key];
+        if (control.type === 'select' && control.options?.length) {
+          const current = String(value ?? control.defaultValue ?? control.options[0]?.value ?? '');
+          return (
+            <ComposerSelect
+              key={control.key}
+              label={control.label}
+              ariaLabel={control.label}
+              value={current}
+              onChange={(next) => setValue(control.key, next)}
+              options={control.options}
+            />
+          );
+        }
+        if (control.type === 'boolean') {
+          const enabled = Boolean(value);
+          return (
+            <button
+              key={control.key}
+              type="button"
+              onClick={() => setValue(control.key, !enabled)}
+              className={clsx(
+                'inline-flex h-9 items-center gap-1.5 rounded-[8px] border bg-white px-3 text-[13px] outline-none transition',
+                enabled ? 'border-[#a9b8f4] text-[#2156d9]' : 'border-[#d7dde5] text-[#667085] hover:border-[#b8c0cc]',
+              )}
+              aria-pressed={enabled}
+            >
+              <span>{control.label}</span>
+              <span>{enabled ? '开' : '关'}</span>
+            </button>
+          );
+        }
+        if (control.type === 'text') {
+          return (
+            <label key={control.key} className="inline-flex h-9 min-w-[156px] items-center gap-1.5 rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#667085]">
+              <span className="shrink-0">{control.label}</span>
+              <input
+                className="min-w-0 flex-1 bg-transparent text-[#2156d9] outline-none"
+                value={String(value ?? '')}
+                onChange={(event) => setValue(control.key, event.target.value)}
+              />
+            </label>
+          );
+        }
+        return (
+          <label key={control.key} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-[#d7dde5] bg-white px-3 text-[13px] text-[#667085]">
+            <span className="shrink-0">{control.label}</span>
+            <input
+              className="w-16 bg-transparent text-[#2156d9] outline-none"
+              type="number"
+              min={control.min}
+              max={control.max}
+              step={control.step ?? 1}
+              value={String(numberParamValue(value, control.defaultValue))}
+              onChange={(event) => setValue(control.key, Number(event.target.value))}
+            />
+          </label>
+        );
+      })}
+    </>
+  );
+}
+
 function HistoryActionMenu({
   disabled,
   onDeleteBefore3Days,
@@ -1608,14 +1712,153 @@ function promptGalleryItemToCard(item: PromptGalleryItem): PromptGalleryCard {
   };
 }
 
+function modelParameterControls(model: SelectModel | undefined, mode: StudioMode): ModelParameterControl[] {
+  const schema = model?.parametersSchema;
+  const rows = Array.isArray(schema)
+    ? schema
+    : isRecord(schema) && Array.isArray(schema.controls)
+      ? schema.controls
+      : [];
+  return rows
+    .map((row) => normalizeParameterControl(row, mode))
+    .filter((row): row is ModelParameterControl => Boolean(row));
+}
+
+function normalizeParameterControl(row: unknown, mode: StudioMode): ModelParameterControl | null {
+  if (!isRecord(row) || row.hidden === true) return null;
+  const key = stringValue(row.key || row.name).trim();
+  if (!key) return null;
+  const modes = Array.isArray(row.modes)
+    ? row.modes.map((item) => stringValue(item).trim()).filter(Boolean) as StudioMode[]
+    : undefined;
+  if (modes?.length && !modes.includes(mode)) return null;
+  const rawType = stringValue(row.type).toLowerCase();
+  const type: ModelParameterControl['type'] = rawType === 'select' || rawType === 'enum'
+    ? 'select'
+    : rawType === 'boolean' || rawType === 'switch'
+      ? 'boolean'
+      : rawType === 'text' || rawType === 'string'
+        ? 'text'
+        : 'number';
+  const options = normalizeParameterOptions(row.options);
+  if (type === 'select' && !options.length) return null;
+  return {
+    key,
+    label: stringValue(row.label).trim() || key,
+    type,
+    defaultValue: row.default ?? row.default_value,
+    min: numberMaybe(row.min),
+    max: numberMaybe(row.max),
+    step: numberMaybe(row.step),
+    options,
+    modes,
+  };
+}
+
+function normalizeParameterOptions(value: unknown): { value: string; label: string }[] {
+  if (!Array.isArray(value)) return [];
+  const out: { value: string; label: string }[] = [];
+  for (const item of value) {
+    if (isRecord(item)) {
+      const optionValue = stringValue(item.value || item.key).trim();
+      if (!optionValue) continue;
+      out.push({ value: optionValue, label: stringValue(item.label).trim() || optionValue });
+      continue;
+    }
+    const optionValue = stringValue(item).trim();
+    if (optionValue) out.push({ value: optionValue, label: optionValue });
+  }
+  return out;
+}
+
+function parameterValuesForControls(controls: ModelParameterControl[], previous: Record<string, unknown>) {
+  const next: Record<string, unknown> = {};
+  for (const control of controls) {
+    const existing = previous[control.key];
+    next[control.key] = existing === undefined ? defaultParameterValue(control) : normalizeParameterValue(control, existing);
+  }
+  return next;
+}
+
+function defaultParameterValue(control: ModelParameterControl): unknown {
+  if (control.defaultValue !== undefined) return normalizeParameterValue(control, control.defaultValue);
+  if (control.type === 'select') return control.options?.[0]?.value ?? '';
+  if (control.type === 'boolean') return false;
+  if (control.type === 'text') return '';
+  return control.min ?? 0;
+}
+
+function normalizeParameterValue(control: ModelParameterControl, value: unknown): unknown {
+  if (control.type === 'number') return numberParamValue(value, control.defaultValue);
+  if (control.type === 'boolean') return Boolean(value);
+  if (control.type === 'select') {
+    const current = stringValue(value);
+    return control.options?.some((option) => option.value === current) ? current : defaultParameterValue({ ...control, defaultValue: undefined });
+  }
+  return stringValue(value);
+}
+
+function numberParamValue(value: unknown, fallback: unknown) {
+  const next = Number(value);
+  if (Number.isFinite(next)) return next;
+  const fallbackNumber = Number(fallback);
+  return Number.isFinite(fallbackNumber) ? fallbackNumber : 0;
+}
+
+function textGenerationParams(values: Record<string, unknown>) {
+  const maxTokens = clampNumber(Math.round(numberParamValue(values.max_tokens, 1600)), 1, 8000);
+  const params = cleanModelParams(values, ['max_tokens']);
+  return { maxTokens, params };
+}
+
+function imageGenerationParams(values: Record<string, unknown>, resolution: string) {
+  const params: Record<string, unknown> = { ...cleanModelParams(values), resolution };
+  if (!String(params.quality ?? '').trim()) params.quality = DEFAULT_IMAGE_QUALITY;
+  return params;
+}
+
+function imageQualityParam(values: Record<string, unknown>) {
+  return stringValue(values.quality).trim() || DEFAULT_IMAGE_QUALITY;
+}
+
+function cleanModelParams(values: Record<string, unknown>, omit: string[] = []) {
+  const skip = new Set(omit);
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (skip.has(key) || value === undefined || value === null || value === '') continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+function numberMaybe(value: unknown) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : undefined;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function imageModelsByCatalog(models: PublicModel[] | undefined): SelectModel[] {
   const rows = (models ?? [])
     .filter((m) => m.enabled !== false && m.kind === 'image' && m.model_code)
-    .filter((m) => PRIMARY_IMAGE_MODEL_CODES.has(m.model_code))
     .map((m) => ({
       code: m.model_code,
       label: imageModelLabel(m),
+      pricingMode: m.pricing_mode,
       cost: typeof m.unit_points === 'number' ? m.unit_points / 100 : undefined,
+      capabilities: m.capabilities,
+      parametersSchema: m.parameters_schema,
       imagePriceRules: m.image_price_rules,
     }));
   return rows.length ? rows : IMAGE_MODELS;
@@ -1632,24 +1875,38 @@ function modelsByKind(models: PublicModel[] | undefined, kind: PublicModel['kind
     .map((m) => ({
       code: m.model_code,
       label: m.name || m.model_code,
+      pricingMode: m.pricing_mode,
       cost: typeof m.unit_points === 'number' ? m.unit_points / 100 : undefined,
       input: typeof m.input_unit_points === 'number' ? m.input_unit_points / 100 : undefined,
       output: typeof m.output_unit_points === 'number' ? m.output_unit_points / 100 : undefined,
+      capabilities: m.capabilities,
+      parametersSchema: m.parameters_schema,
       imagePriceRules: m.image_price_rules,
     }));
   return rows.length ? rows : fallback;
 }
 
-function estimateImageCost(model: SelectModel | undefined, ratio: string, resolution: string, mode: 't2i' | 'i2i') {
+function textCostLabel(model: SelectModel | undefined) {
+  const mode = String(model?.pricingMode || '').toLowerCase();
+  if (mode === 'char') return '按实际字符';
+  if (mode === 'token') return '按实际 Token';
+  if (mode === 'manual') return '按后台结算';
+  return '按实际用量';
+}
+
+function estimateImageCost(model: SelectModel | undefined, ratio: string, resolution: string, mode: 't2i' | 'i2i', quality = '') {
   const rules = model?.imagePriceRules?.length ? model.imagePriceRules : defaultImagePriceRules(model?.code ?? 'gpt-image-2');
   const normalizedRatio = normalizeImageRatio(ratio);
   const normalizedResolution = normalizeImageResolution(resolution);
+  const normalizedQuality = String(quality || '').trim().toLowerCase();
   const ratioGroup = imageRatioGroup(normalizedRatio);
   const matched = rules.find((rule) => {
     if (rule.enabled === false) return false;
     if (rule.model_code && model?.code && rule.model_code !== model.code) return false;
     if (rule.mode !== mode) return false;
     if (normalizeImageResolution(rule.resolution) !== normalizedResolution) return false;
+    const ruleQuality = String(rule.quality || '').trim().toLowerCase();
+    if (ruleQuality && ruleQuality !== normalizedQuality) return false;
     const ratios = rule.ratios ?? [];
     if (ratios.some((item) => normalizeImageRatio(item) === normalizedRatio)) return true;
     const group = String(rule.ratio_group || '').trim();

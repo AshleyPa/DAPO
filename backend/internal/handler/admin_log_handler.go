@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,14 +21,26 @@ import (
 	"github.com/kleinai/backend/pkg/response"
 )
 
+const (
+	adminLogRouteSnapshotKey   = "_model_gateway_route_snapshot"
+	adminLogPricingSnapshotKey = "_model_gateway_pricing_snapshot"
+	adminLogOutputSnapshotKey  = "_model_gateway_output_snapshot"
+	adminLogVideoJobKey        = "_model_gateway_video_job"
+)
+
 type AdminLogHandler struct {
-	gen *repo.GenerationRepo
-	acc *repo.AccountRepo
-	aes *crypto.AESGCM
+	gen    *repo.GenerationRepo
+	acc    *repo.AccountRepo
+	aes    *crypto.AESGCM
+	wallet *repo.WalletRepo
 }
 
-func NewAdminLogHandler(gen *repo.GenerationRepo, acc *repo.AccountRepo, aes *crypto.AESGCM) *AdminLogHandler {
-	return &AdminLogHandler{gen: gen, acc: acc, aes: aes}
+func NewAdminLogHandler(gen *repo.GenerationRepo, acc *repo.AccountRepo, aes *crypto.AESGCM, wallet ...*repo.WalletRepo) *AdminLogHandler {
+	h := &AdminLogHandler{gen: gen, acc: acc, aes: aes}
+	if len(wallet) > 0 {
+		h.wallet = wallet[0]
+	}
+	return h
 }
 
 func (h *AdminLogHandler) GenerationLogs(c *gin.Context) {
@@ -75,6 +88,12 @@ func (h *AdminLogHandler) GenerationLogs(c *gin.Context) {
 		if r.Error != nil {
 			item.Error = *r.Error
 		}
+		if snapshot := modelGatewayRouteSnapshotFromParams(r.Params); snapshot != nil {
+			item.ModelGatewayRouteSnapshot = snapshot
+		}
+		if snapshot := pricingSnapshotFromParams(r.Params); snapshot != nil {
+			item.PricingSnapshot = snapshot
+		}
 		out = append(out, item)
 	}
 	page, pageSize := req.Page, req.PageSize
@@ -85,6 +104,265 @@ func (h *AdminLogHandler) GenerationLogs(c *gin.Context) {
 		pageSize = 20
 	}
 	response.Page(c, out, total, page, pageSize)
+}
+
+func (h *AdminLogHandler) ModelGatewayAudit(c *gin.Context) {
+	var req dto.ModelGatewayAuditListReq
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.Fail(c, errcode.InvalidParam.Wrap(err))
+		return
+	}
+	rows, total, err := h.gen.ListModelGatewayAudit(c.Request.Context(), repo.AdminModelGatewayAuditFilter{
+		Keyword:       req.Keyword,
+		Kind:          req.Kind,
+		ModelCode:     req.ModelCode,
+		SourceCode:    req.SourceCode,
+		SkipReason:    req.SkipReason,
+		PricingSource: req.PricingSource,
+		Settlement:    req.Settlement,
+		AuditType:     req.AuditType,
+		Status:        req.Status,
+		Page:          req.Page,
+		PageSize:      req.PageSize,
+	})
+	if err != nil {
+		response.Fail(c, errcode.DBError.Wrap(err))
+		return
+	}
+	out := make([]*dto.ModelGatewayAuditResp, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, modelGatewayAuditRespFromRow(r))
+	}
+	page, pageSize := req.Page, req.PageSize
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	response.Page(c, out, total, page, pageSize)
+}
+
+func modelGatewayRouteSnapshotFromParams(raw *string) any {
+	return paramsObjectValue(raw, adminLogRouteSnapshotKey)
+}
+
+func pricingSnapshotFromParams(raw *string) any {
+	return paramsObjectValue(raw, adminLogPricingSnapshotKey)
+}
+
+func outputSnapshotFromParams(raw *string) any {
+	return paramsObjectValue(raw, adminLogOutputSnapshotKey)
+}
+
+func videoJobSnapshotFromParams(raw *string) any {
+	return paramsObjectValue(raw, adminLogVideoJobKey)
+}
+
+func paramsObjectValue(raw *string, key string) any {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(*raw), &params); err != nil {
+		return nil
+	}
+	snapshot, ok := params[key]
+	if !ok {
+		return nil
+	}
+	return snapshot
+}
+
+func modelGatewayAuditRespFromRow(r *repo.AdminGenerationLogRow) *dto.ModelGatewayAuditResp {
+	item := &dto.ModelGatewayAuditResp{
+		TaskID:     r.TaskID,
+		CreatedAt:  r.CreatedAt.Unix(),
+		UserID:     r.UserID,
+		UserLabel:  r.UserLabel,
+		Kind:       r.Kind,
+		ModelCode:  r.ModelCode,
+		Status:     r.Status,
+		CostPoints: r.CostPoints,
+	}
+	if r.DurationMs != nil {
+		item.DurationMs = *r.DurationMs
+	}
+	if r.PreviewURL != nil && *r.PreviewURL != "" {
+		item.PreviewURL = fmt.Sprintf("/admin/api/v1/logs/generations/%s/preview", r.TaskID)
+	}
+
+	routeSnapshot := modelGatewayRouteSnapshotFromParams(r.Params)
+	if routeSnapshot != nil {
+		item.ModelGatewayRouteSnapshot = routeSnapshot
+		fillModelGatewayAuditRouteFields(item, routeSnapshot)
+	}
+	pricingSnapshot := pricingSnapshotFromParams(r.Params)
+	if pricingSnapshot != nil {
+		item.PricingSnapshot = pricingSnapshot
+		fillModelGatewayAuditPricingFields(item, pricingSnapshot)
+	}
+	if outputSnapshot := outputSnapshotFromParams(r.Params); outputSnapshot != nil {
+		item.OutputSnapshot = outputSnapshot
+	}
+	if videoJobSnapshot := videoJobSnapshotFromParams(r.Params); videoJobSnapshot != nil {
+		item.VideoJobSnapshot = videoJobSnapshot
+	}
+	return item
+}
+
+func fillModelGatewayAuditRouteFields(item *dto.ModelGatewayAuditResp, snapshot any) {
+	m := auditMap(snapshot)
+	if m == nil {
+		return
+	}
+	if n, ok := auditInt(m["selected_index"]); ok {
+		item.SelectedIndex = &n
+	}
+	if n, ok := auditInt(m["candidate_count"]); ok {
+		item.CandidateCount = n
+	}
+	if n, ok := auditInt(m["skipped_count"]); ok {
+		item.SkippedCount = n
+	}
+	if item.CandidateCount == 0 {
+		item.CandidateCount = len(auditMapSlice(m["candidates"]))
+	}
+	if item.SkippedCount == 0 {
+		item.SkippedCount = len(auditMapSlice(m["skipped_candidates"]))
+	}
+	selected := selectedAuditCandidate(m)
+	if selected != nil {
+		item.SelectedSourceType = auditString(selected["source_type"])
+		item.SelectedSourceCode = auditString(selected["source_code"])
+		item.SelectedSourceName = auditString(selected["source_name"])
+		item.SelectedProvider = auditString(selected["provider"])
+		item.SelectedAdapter = auditString(selected["adapter"])
+		item.SelectedUpstreamModel = auditString(selected["upstream_model"])
+	}
+	item.SkipReasons = auditSkipReasons(m)
+}
+
+func fillModelGatewayAuditPricingFields(item *dto.ModelGatewayAuditResp, snapshot any) {
+	m := auditMap(snapshot)
+	if m == nil {
+		return
+	}
+	item.PricingSource = auditString(m["pricing_source"])
+	item.PricingMode = auditString(m["pricing_mode"])
+	item.Settlement = auditString(m["settlement"])
+	item.PreDeductPoints = auditInt64(m["pre_deduct_points"])
+	item.ActualPoints = auditInt64(m["actual_points"])
+	item.RefundPoints = auditInt64(m["refund_points"])
+	item.ExtraPoints = auditInt64(m["extra_points"])
+	if item.ActualPoints == 0 {
+		item.ActualPoints = auditInt64(m["estimated_total_points"])
+	}
+	if item.ActualPoints == 0 {
+		item.ActualPoints = auditInt64(m["estimated_points"])
+	}
+}
+
+func selectedAuditCandidate(route map[string]any) map[string]any {
+	selectedIndex, ok := auditInt(route["selected_index"])
+	if !ok {
+		return nil
+	}
+	for _, c := range auditMapSlice(route["candidates"]) {
+		idx, ok := auditInt(c["index"])
+		if ok && idx == selectedIndex {
+			return c
+		}
+	}
+	candidates := auditMapSlice(route["candidates"])
+	if selectedIndex > 0 && selectedIndex <= len(candidates) {
+		return candidates[selectedIndex-1]
+	}
+	if selectedIndex >= 0 && selectedIndex < len(candidates) {
+		return candidates[selectedIndex]
+	}
+	return nil
+}
+
+func auditSkipReasons(route map[string]any) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0)
+	for _, c := range auditMapSlice(route["skipped_candidates"]) {
+		reason := strings.TrimSpace(auditString(c["skip_reason"]))
+		if reason == "" || seen[reason] {
+			continue
+		}
+		seen[reason] = true
+		out = append(out, reason)
+	}
+	return out
+}
+
+func auditMap(v any) map[string]any {
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	return nil
+}
+
+func auditMapSlice(v any) []map[string]any {
+	switch arr := v.(type) {
+	case []map[string]any:
+		return arr
+	case []any:
+		out := make([]map[string]any, 0, len(arr))
+		for _, item := range arr {
+			if m := auditMap(item); m != nil {
+				out = append(out, m)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func auditString(v any) string {
+	switch s := v.(type) {
+	case string:
+		return s
+	case nil:
+		return ""
+	default:
+		return strings.TrimSpace(fmt.Sprint(s))
+	}
+}
+
+func auditInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
+	default:
+		return 0, false
+	}
+}
+
+func auditInt64(v any) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case json.Number:
+		i, _ := n.Int64()
+		return i
+	default:
+		return 0
+	}
 }
 
 func (h *AdminLogHandler) GenerationUpstreamLogs(c *gin.Context) {
@@ -99,6 +377,24 @@ func (h *AdminLogHandler) GenerationUpstreamLogs(c *gin.Context) {
 		return
 	}
 	response.OK(c, upstreamLogRows(rows))
+}
+
+func (h *AdminLogHandler) GenerationBillingProof(c *gin.Context) {
+	taskID := strings.TrimSpace(c.Param("task_id"))
+	if taskID == "" {
+		response.Fail(c, errcode.InvalidParam.WithMsg("empty task_id"))
+		return
+	}
+	if h.wallet == nil {
+		response.Fail(c, errcode.ResourceMissing)
+		return
+	}
+	proof, err := h.wallet.GetTaskBillingProof(c.Request.Context(), taskID)
+	if err != nil {
+		response.Fail(c, errcode.DBError.Wrap(err))
+		return
+	}
+	response.OK(c, billingProofResp(taskID, proof))
 }
 
 func (h *AdminLogHandler) UpstreamFailures(c *gin.Context) {
@@ -169,6 +465,83 @@ func upstreamLogRows(rows []*repo.AdminGenerationUpstreamLogRow) []*dto.AdminGen
 			item.Meta = *r.Meta
 		}
 		out = append(out, item)
+	}
+	return out
+}
+
+func billingProofResp(taskID string, proof *repo.TaskBillingProof) *dto.AdminGenerationBillingProofResp {
+	out := &dto.AdminGenerationBillingProofResp{
+		TaskID:     taskID,
+		WalletLogs: []*dto.AdminGenerationBillingWalletResp{},
+		Refunds:    []*dto.AdminGenerationRefundRecordResp{},
+	}
+	if proof == nil {
+		return out
+	}
+	if rec := proof.ConsumeRecord; rec != nil {
+		out.Consume = &dto.AdminGenerationConsumeRecordResp{
+			ID:          rec.ID,
+			TaskID:      rec.TaskID,
+			UserID:      rec.UserID,
+			Kind:        rec.Kind,
+			ModelCode:   rec.ModelCode,
+			Count:       rec.Count,
+			UnitPoints:  rec.UnitPoints,
+			TotalPoints: rec.TotalPoints,
+			Status:      rec.Status,
+			AccountID:   rec.AccountID,
+			CreatedAt:   rec.CreatedAt.Unix(),
+			UpdatedAt:   rec.UpdatedAt.Unix(),
+		}
+		out.Summary.ConsumeRecordFound = true
+		out.Summary.ConsumeStatus = rec.Status
+		out.Summary.ConsumeTotalPoints = rec.TotalPoints
+	}
+	for _, log := range proof.WalletLogs {
+		if log == nil {
+			continue
+		}
+		item := &dto.AdminGenerationBillingWalletResp{
+			ID:           log.ID,
+			UserID:       log.UserID,
+			Direction:    log.Direction,
+			BizType:      log.BizType,
+			BizID:        log.BizID,
+			Points:       log.Points,
+			PointsBefore: log.PointsBefore,
+			PointsAfter:  log.PointsAfter,
+			CreatedAt:    log.CreatedAt.Unix(),
+		}
+		if log.Remark != nil {
+			item.Remark = *log.Remark
+		}
+		out.WalletLogs = append(out.WalletLogs, item)
+		out.Summary.WalletNetPoints += log.Points
+		if log.BizType == model.BizRefund && log.Points > 0 {
+			out.Summary.WalletRefundPoints += log.Points
+		}
+		if log.BizType == model.BizConsume && strings.HasSuffix(log.BizID, ":extra") && log.Points < 0 {
+			out.Summary.WalletExtraPoints += -log.Points
+		}
+	}
+	for _, refund := range proof.RefundRecords {
+		if refund == nil {
+			continue
+		}
+		out.Refunds = append(out.Refunds, &dto.AdminGenerationRefundRecordResp{
+			ID:        refund.ID,
+			TaskID:    refund.TaskID,
+			UserID:    refund.UserID,
+			Points:    refund.Points,
+			Reason:    refund.Reason,
+			Operator:  refund.Operator,
+			CreatedAt: refund.CreatedAt.Unix(),
+		})
+	}
+	out.Summary.WalletLogCount = len(out.WalletLogs)
+	out.Summary.RefundRecordCount = len(out.Refunds)
+	if out.Summary.WalletNetPoints < 0 {
+		out.Summary.WalletSpendPoints = -out.Summary.WalletNetPoints
 	}
 	return out
 }

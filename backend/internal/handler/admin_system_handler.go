@@ -23,8 +23,8 @@ type AdminSystemHandler struct {
 }
 
 // NewAdminSystemHandler 构造。
-func NewAdminSystemHandler(svc *service.SystemConfigService, cfg *config.Config) *AdminSystemHandler {
-	return &AdminSystemHandler{svc: svc, readiness: service.NewSystemReadinessService(cfg, svc)}
+func NewAdminSystemHandler(svc *service.SystemConfigService, cfg *config.Config, readinessDeps ...service.SystemReadinessModelGatewayDeps) *AdminSystemHandler {
+	return &AdminSystemHandler{svc: svc, readiness: service.NewSystemReadinessService(cfg, svc, readinessDeps...)}
 }
 
 // GetSettings GET /admin/api/v1/system/settings

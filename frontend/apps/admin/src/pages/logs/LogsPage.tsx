@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Eye,
+  GitBranch,
   ImageIcon,
   MessageSquare,
   RefreshCw,
@@ -17,11 +18,18 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { fmtPoints, fmtTime } from '../../lib/format';
 import { logsApi } from '../../lib/services';
-import type { AdminGenerationLogItem, AdminGenerationUpstreamLogItem } from '../../lib/types';
+import type {
+	  AdminGenerationLogItem,
+	  AdminGenerationUpstreamLogItem,
+	  ModelGatewayRouteSnapshot,
+	  ModelGatewayRouteSnapshotCandidate,
+	  PricingAuditSnapshot,
+	} from '../../lib/types';
 import { toast } from '../../stores/toast';
 
 const pageSize = 20;
 const failurePageSize = 10;
+type FailureProviderFilter = 'all' | 'gpt' | 'grok' | 'api_channel';
 
 function statusInfo(s: number): { label: string; cls: string } {
   switch (s) {
@@ -119,7 +127,7 @@ export default function LogsPage() {
   const [confirmPurge, setConfirmPurge] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [upstreamTask, setUpstreamTask] = useState<AdminGenerationLogItem | null>(null);
-  const [failureProvider, setFailureProvider] = useState<'all' | 'gpt' | 'grok'>('all');
+  const [failureProvider, setFailureProvider] = useState<FailureProviderFilter>('all');
   const [failureHours, setFailureHours] = useState<'24' | '168' | '720'>('168');
   const [failurePage, setFailurePage] = useState(1);
 
@@ -344,8 +352,18 @@ export default function LogsPage() {
                     <tr>
                       <td colSpan={10} className="bg-surface-2/60 p-0">
                         <div className="grid gap-3 p-4 lg:grid-cols-[1fr_1fr]">
-                          <DetailBlock title="提示词" value={row.prompt || '-'} />
-                          <DetailBlock title="错误信息" value={row.error || '-'} danger={Boolean(row.error)} />
+	                          <DetailBlock title="提示词" value={row.prompt || '-'} />
+	                          <DetailBlock title="错误信息" value={row.error || '-'} danger={Boolean(row.error)} />
+	                          {row.pricing_snapshot && (
+	                            <div className="lg:col-span-2">
+	                              <PricingSnapshotPanel snapshot={row.pricing_snapshot} />
+	                            </div>
+	                          )}
+	                          {row.model_gateway_route_snapshot && (
+	                            <div className="lg:col-span-2">
+	                              <RouteSnapshotPanel snapshot={row.model_gateway_route_snapshot} />
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -398,9 +416,9 @@ function UpstreamFailurePanel({
   page: number;
   loading: boolean;
   fetching: boolean;
-  provider: 'all' | 'gpt' | 'grok';
+  provider: FailureProviderFilter;
   hours: '24' | '168' | '720';
-  onProviderChange: (next: 'all' | 'gpt' | 'grok') => void;
+  onProviderChange: (next: FailureProviderFilter) => void;
   onHoursChange: (next: '24' | '168' | '720') => void;
   onRefresh: () => void;
   onPrev: () => void;
@@ -417,10 +435,11 @@ function UpstreamFailurePanel({
           <p className="mt-0.5 text-small text-text-tertiary">聚合最近失败的 provider 请求，辅助定位账号池、路由和上游异常。</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <select className="input h-9 w-[116px]" value={provider} onChange={(e) => onProviderChange(e.target.value as 'all' | 'gpt' | 'grok')}>
-            <option value="all">全部池</option>
+          <select className="input h-9 w-[128px]" value={provider} onChange={(e) => onProviderChange(e.target.value as FailureProviderFilter)}>
+            <option value="all">全部来源</option>
             <option value="gpt">GPT</option>
             <option value="grok">Grok</option>
+            <option value="api_channel">API 渠道</option>
           </select>
           <select className="input h-9 w-[128px]" value={hours} onChange={(e) => onHoursChange(e.target.value as '24' | '168' | '720')}>
             <option value="24">最近 24 小时</option>
@@ -494,6 +513,200 @@ function DetailBlock({ title, value, danger }: { title: string; value: string; d
       </div>
     </div>
   );
+}
+
+function PricingSnapshotPanel({ snapshot }: { snapshot: PricingAuditSnapshot }) {
+  const estimated = snapshot.estimated_total_points ?? snapshot.estimated_points;
+  const actual = snapshot.actual_points ?? estimated;
+  const usage = snapshot.usage;
+  const matchedRule = snapshot.matched_rule ? JSON.stringify(snapshot.matched_rule, null, 2) : '';
+  return (
+    <section className="rounded-xl border border-border bg-surface-1 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-small font-semibold text-text-primary">扣费依据</div>
+          <div className="mt-1 flex flex-wrap gap-2 text-tiny text-text-tertiary">
+            <span>来源：{pricingSourceLabel(snapshot.pricing_source)}</span>
+            <span>模式：{pricingModeLabel(snapshot.pricing_mode)}</span>
+            <span>结算：{settlementLabel(snapshot.settlement)}</span>
+          </div>
+        </div>
+        {snapshot.unit_basis && (
+          <span className="rounded-full border border-border bg-surface-2 px-2 py-1 text-tiny text-text-tertiary">
+            {unitBasisLabel(snapshot.unit_basis)}
+          </span>
+        )}
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-4">
+        <PricingMetric label="预扣" value={fmtPoints(snapshot.pre_deduct_points ?? estimated)} />
+        <PricingMetric label="实扣" value={fmtPoints(actual)} />
+        <PricingMetric label="退款" value={fmtPoints(snapshot.refund_points)} tone={snapshot.refund_points ? 'good' : undefined} />
+        <PricingMetric label="补扣" value={fmtPoints(snapshot.extra_points)} tone={snapshot.extra_points ? 'warn' : undefined} />
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        <PricingMetric label="公开模型" value={snapshot.model_code || '-'} />
+        <PricingMetric label="入口" value={routeText(snapshot.kind)} />
+        <PricingMetric label="数量/参数" value={pricingRequestLabel(snapshot)} />
+      </div>
+      {(typeof snapshot.input_unit_points === 'number' || typeof snapshot.output_unit_points === 'number' || usage || snapshot.usage_missing) && (
+        <div className="mt-3 grid gap-2 md:grid-cols-3">
+          <PricingMetric label="输入单价" value={typeof snapshot.input_unit_points === 'number' ? `${fmtPoints(snapshot.input_unit_points)} / 1K` : '-'} />
+          <PricingMetric label="输出单价" value={typeof snapshot.output_unit_points === 'number' ? `${fmtPoints(snapshot.output_unit_points)} / 1K` : '-'} />
+          <PricingMetric label="Usage" value={usage ? `${usage.prompt_tokens ?? 0} / ${usage.completion_tokens ?? 0} / ${usage.total_tokens ?? 0}` : (snapshot.usage_missing ? '上游未返回' : '-')} />
+        </div>
+      )}
+      {matchedRule && <DetailBlock title="命中价格规则" value={matchedRule} />}
+      {snapshot.failure_reason && <DetailBlock title="失败退款原因" value={snapshot.failure_reason} danger />}
+    </section>
+  );
+}
+
+function PricingMetric({ label, value, tone }: { label: string; value: string; tone?: 'good' | 'warn' }) {
+  const toneClass = tone === 'good' ? 'text-emerald-700' : tone === 'warn' ? 'text-warning' : 'text-text-primary';
+  return (
+    <div className="rounded-lg border border-border bg-surface-2 px-3 py-2">
+      <div className="text-tiny text-text-tertiary">{label}</div>
+      <div className={`mt-1 truncate text-small font-semibold ${toneClass}`} title={value}>{value}</div>
+    </div>
+  );
+}
+
+function RouteSnapshotPanel({ snapshot }: { snapshot: ModelGatewayRouteSnapshot }) {
+  const candidates = Array.isArray(snapshot.candidates) ? snapshot.candidates : [];
+  const skipped = Array.isArray(snapshot.skipped_candidates) ? snapshot.skipped_candidates : [];
+  return (
+    <section className="rounded-xl border border-border bg-surface-1 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-small font-semibold text-text-primary">
+            <GitBranch size={15} className="text-primary" /> Model Gateway 路由快照
+          </div>
+          <div className="mt-1 flex flex-wrap gap-2 text-tiny text-text-tertiary">
+            <span>公开模型：{routeText(snapshot.model_code)}</span>
+            <span>入口：{routeText(snapshot.kind)}</span>
+            <span>候选：{snapshot.candidate_count ?? candidates.length}</span>
+            <span>跳过：{snapshot.skipped_count ?? skipped.length}</span>
+          </div>
+        </div>
+        {typeof snapshot.selected_index === 'number' && (
+          <span className="rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-tiny text-primary">
+            命中 #{snapshot.selected_index}
+          </span>
+        )}
+      </div>
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <RouteCandidateList title="候选链" rows={candidates} selectedIndex={snapshot.selected_index} />
+        <RouteCandidateList title="预网络跳过" rows={skipped} skipped />
+      </div>
+    </section>
+  );
+}
+
+function RouteCandidateList({
+  title,
+  rows,
+  selectedIndex,
+  skipped,
+}: {
+  title: string;
+  rows: ModelGatewayRouteSnapshotCandidate[];
+  selectedIndex?: number;
+  skipped?: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-surface-2 p-2">
+      <div className="mb-2 text-tiny font-semibold text-text-tertiary">{title}</div>
+      {rows.length === 0 ? (
+        <div className="py-3 text-center text-tiny text-text-tertiary">无记录</div>
+      ) : (
+        <div className="space-y-2">
+          {rows.map((row, fallbackIndex) => {
+            const idx = typeof row.index === 'number' ? row.index : fallbackIndex + 1;
+            const selected = !skipped && typeof selectedIndex === 'number' && idx === selectedIndex;
+            return (
+              <div key={`${title}-${idx}-${row.source_type || ''}-${row.source_code || ''}`} className="rounded-md border border-border bg-surface-1 p-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-small font-semibold text-text-primary">
+                      #{idx} {routeSourceTypeLabel(row.source_type)} · {routeText(row.source_name || row.source_code || row.provider)}
+                    </div>
+                    <div className="mt-1 truncate font-mono text-tiny text-text-tertiary">{routeText(row.upstream_model)}</div>
+                  </div>
+                  {selected && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-tiny text-emerald-700">命中</span>}
+                  {skipped && <span className="rounded-full bg-red-50 px-2 py-0.5 text-tiny text-red-700">跳过</span>}
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-1 text-tiny text-text-tertiary">
+                  <div>协议：{routeText(row.adapter)}</div>
+                  <div>认证：{routeText(row.auth_type)}</div>
+                  <div>策略：{routeText(row.strategy)}</div>
+                  <div>图片调用：{routeText(row.image_api_mode)}</div>
+                </div>
+                {row.skip_reason && <div className="mt-2 text-small text-red-600">{row.skip_reason}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function routeSourceTypeLabel(value?: string) {
+  if (value === 'api_channel') return 'API 渠道';
+  if (value === 'account_pool') return '账号池';
+  return value || '-';
+}
+
+function pricingSourceLabel(value?: string) {
+  if (value === 'model_catalog') return '模型库';
+  if (value === 'system_config') return '系统配置';
+  if (value === 'default') return '默认兜底';
+  return value || '-';
+}
+
+function pricingModeLabel(value?: string) {
+  if (value === 'fixed') return '固定单价';
+  if (value === 'token') return 'Token/字数';
+  if (value === 'matrix') return '矩阵计价';
+  if (value === 'duration_scaled') return '按时长折算';
+  if (value === 'manual') return '手动/外部';
+  if (value === 'legacy') return '旧配置';
+  return value || '-';
+}
+
+function settlementLabel(value?: string) {
+  if (value === 'estimated_until_usage') return '等待 usage';
+  if (value === 'pre_deduct_fixed') return '预扣即实扣';
+  if (value === 'settled') return '已结算';
+  if (value === 'partial_refund') return '已退差额';
+  if (value === 'extra_charged') return '已补扣';
+  if (value === 'refunded') return '已退款';
+  if (value === 'failed_refunded') return '失败退款';
+  return value || '-';
+}
+
+function unitBasisLabel(value?: string) {
+  if (value === 'per_generation') return '单次/单张';
+  if (value === 'per_1k_tokens') return '每 1K token';
+  return value || '-';
+}
+
+function pricingRequestLabel(snapshot: PricingAuditSnapshot) {
+  const parts: string[] = [];
+  if (snapshot.count) parts.push(`${snapshot.count} 个`);
+  if (snapshot.request_mode) parts.push(snapshot.request_mode);
+  if (snapshot.ratio) parts.push(snapshot.ratio);
+  if (snapshot.resolution) parts.push(snapshot.resolution);
+  if (snapshot.duration_sec) parts.push(`${snapshot.duration_sec}s`);
+  if (snapshot.quality) parts.push(snapshot.quality);
+  if (typeof snapshot.estimated_prompt_tokens === 'number') parts.push(`预估输入 ${snapshot.estimated_prompt_tokens}`);
+  if (typeof snapshot.estimated_completion_tokens === 'number') parts.push(`预估输出 ${snapshot.estimated_completion_tokens}`);
+  return parts.length ? parts.join(' · ') : '-';
+}
+
+function routeText(value?: string | number) {
+  if (value === undefined || value === null || value === '') return '-';
+  return String(value);
 }
 
 function UpstreamDialog({ task, onClose }: { task: AdminGenerationLogItem; onClose: () => void }) {

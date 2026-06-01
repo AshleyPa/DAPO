@@ -361,6 +361,14 @@ func openAICompatibleImageEndpoint(base string) string {
 	return base + "/v1/images/generations"
 }
 
+func openAICompatibleVideoEndpoint(base string) string {
+	base = normalizeOpenAICompatibleBase(base)
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/video/generations"
+	}
+	return base + "/v1/video/generations"
+}
+
 func openAICompatibleChatEndpoint(base string) string {
 	base = normalizeOpenAICompatibleBase(base)
 	if strings.HasSuffix(base, "/v1") {
@@ -378,10 +386,14 @@ func normalizeOpenAICompatibleBase(base string) string {
 	endpointSuffixes := []string{
 		"/v1/models",
 		"/v1/images/generations",
+		"/v1/video/generations",
+		"/v1/videos/generations",
 		"/v1/chat/completions",
 		"/v1/responses",
 		"/models",
 		"/images/generations",
+		"/video/generations",
+		"/videos/generations",
 		"/chat/completions",
 		"/responses",
 	}

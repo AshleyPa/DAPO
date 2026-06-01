@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -20,14 +21,15 @@ import (
 
 // OpenAIHandler serves /v1 compatible downstream APIs.
 type OpenAIHandler struct {
-	svc     *service.GenerationService
-	chatSvc *service.ChatService
-	repo    *repo.GenerationRepo
+	svc       *service.GenerationService
+	chatSvc   *service.ChatService
+	repo      *repo.GenerationRepo
+	modelRepo *repo.ModelCatalogRepo
 }
 
 // NewOpenAIHandler constructs OpenAIHandler.
-func NewOpenAIHandler(svc *service.GenerationService, chatSvc *service.ChatService, r *repo.GenerationRepo) *OpenAIHandler {
-	return &OpenAIHandler{svc: svc, chatSvc: chatSvc, repo: r}
+func NewOpenAIHandler(svc *service.GenerationService, chatSvc *service.ChatService, r *repo.GenerationRepo, modelRepo *repo.ModelCatalogRepo) *OpenAIHandler {
+	return &OpenAIHandler{svc: svc, chatSvc: chatSvc, repo: r, modelRepo: modelRepo}
 }
 
 type modelItem struct {
@@ -41,6 +43,13 @@ type modelItem struct {
 
 // Models GET /v1/models.
 func (h *OpenAIHandler) Models(c *gin.Context) {
+	if data, ok := h.catalogModelItems(c.Request.Context()); ok {
+		c.JSON(http.StatusOK, gin.H{
+			"object": "list",
+			"data":   data,
+		})
+		return
+	}
 	data := []modelItem{
 		{ID: "gpt-4o-mini", Object: "model", OwnedBy: "kleinai", Kind: "text", Endpoint: "/v1/chat/completions"},
 		{ID: "gpt-image-2", Object: "model", OwnedBy: "openai", Kind: "image", Endpoint: "/v1/images/generations", Meta: gin.H{"edits": true, "mode": "responses_image_generation"}},
@@ -55,6 +64,61 @@ func (h *OpenAIHandler) Models(c *gin.Context) {
 		"object": "list",
 		"data":   data,
 	})
+}
+
+func (h *OpenAIHandler) catalogModelItems(ctx context.Context) ([]modelItem, bool) {
+	if h.modelRepo == nil {
+		return nil, false
+	}
+	visible := int8(1)
+	status := int8(model.ModelCatalogStatusEnabled)
+	items, _, err := h.modelRepo.List(ctx, repo.ModelCatalogListFilter{
+		Status:   &status,
+		Visible:  &visible,
+		Page:     1,
+		PageSize: 200,
+	})
+	if err != nil || len(items) == 0 {
+		return nil, false
+	}
+	out := make([]modelItem, 0, len(items))
+	for _, item := range items {
+		if item == nil || strings.TrimSpace(item.ModelCode) == "" {
+			continue
+		}
+		kind := publicModelKind(item.EntryKind)
+		meta := gin.H{
+			"display_name":   fallbackString(item.DisplayName, item.ModelCode),
+			"upstream_model": fallbackString(item.UpstreamDefaultModel, item.ModelCode),
+			"pricing_mode":   publicModelPricingMode(item.PricingMode, kind, item.UnitPoints, item.InputUnitPoints, item.OutputUnitPoints),
+		}
+		if capabilities := publicStringListJSON(item.Capabilities); len(capabilities) > 0 {
+			meta["capabilities"] = capabilities
+		}
+		if parametersSchema := publicJSONValue(item.ParametersSchema); parametersSchema != nil {
+			meta["parameters_schema"] = parametersSchema
+		}
+		out = append(out, modelItem{
+			ID:       item.ModelCode,
+			Object:   "model",
+			OwnedBy:  fallbackString(item.ProviderHint, "kleinai"),
+			Kind:     kind,
+			Endpoint: openAIModelEndpoint(kind),
+			Meta:     meta,
+		})
+	}
+	return out, len(out) > 0
+}
+
+func openAIModelEndpoint(kind string) string {
+	switch kind {
+	case model.ModelCatalogKindImage:
+		return "/v1/images/generations"
+	case model.ModelCatalogKindVideo:
+		return "/v1/video/generations"
+	default:
+		return "/v1/chat/completions"
+	}
 }
 
 // ChatCompletions POST /v1/chat/completions.

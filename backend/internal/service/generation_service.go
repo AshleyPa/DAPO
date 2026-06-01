@@ -31,51 +31,68 @@ import (
 	"github.com/kleinai/backend/pkg/errcode"
 	"github.com/kleinai/backend/pkg/jwtpayload"
 	"github.com/kleinai/backend/pkg/logger"
+	"github.com/kleinai/backend/pkg/ratelimit"
 )
 
 const codexOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
 const (
 	routeParamProvider      = "_provider_route_provider"
+	routeParamSourceType    = "_provider_route_source_type"
+	routeParamSourceCode    = "_provider_route_source_code"
+	routeParamAdapter       = "_provider_route_adapter"
 	routeParamUpstreamModel = "_provider_route_upstream_model"
 	routeParamStrategy      = "_provider_route_strategy"
 	routeParamAuthType      = "_provider_route_auth_type"
 	routeParamImageAPIMode  = "_provider_route_image_api_mode"
 	routeParamCandidates    = "_provider_route_candidates"
+	routeParamSnapshot      = "_model_gateway_route_snapshot"
 
 	providerParamImageAPIMode = "image_api_mode"
+
+	generationProviderAPIChannel = "api_channel"
 )
 
 // GenerationService 生成调度服务。
 type GenerationService struct {
-	db        *gorm.DB
-	repo      *repo.GenerationRepo
-	pool      *AccountPool
-	billing   *BillingService
-	providers map[string]provider.Provider // key: "gpt" / "grok"
-	priceFn   PriceFunc
-	aes       *crypto.AESGCM // 用于解密 account.credential_enc
-	proxySvc  *ProxyService
-	cfg       *SystemConfigService
-	routeSvc  *ProviderRouteService
+	db             *gorm.DB
+	repo           *repo.GenerationRepo
+	pool           *AccountPool
+	billing        *BillingService
+	providers      map[string]provider.Provider // key: "gpt" / "grok"
+	priceFn        PriceFunc
+	aes            *crypto.AESGCM // 用于解密 account.credential_enc
+	proxySvc       *ProxyService
+	cfg            *SystemConfigService
+	routeSvc       *ProviderRouteService
+	modelRepo      *repo.ModelCatalogRepo
+	sourceRepo     *repo.ModelSourceRepo
+	apiChannelRepo *repo.APIChannelRepo
+	apiLimiter     apiChannelDistributedLimiter
+
+	videoJobSnapshotHook func(context.Context, string, map[string]any)
 }
 
 // PriceFunc 模型计费：返回单次成本（点 *100）。
 type PriceFunc func(modelCode string, kind provider.Kind, params map[string]any) int64
 
 // NewGenerationService 构造。aes 必须非空（账号凭证加密强制）。
-func NewGenerationService(db *gorm.DB, r *repo.GenerationRepo, pool *AccountPool, billing *BillingService, providers map[string]provider.Provider, priceFn PriceFunc, aes *crypto.AESGCM, proxySvc *ProxyService, cfg *SystemConfigService, routeSvc *ProviderRouteService) *GenerationService {
+func NewGenerationService(db *gorm.DB, r *repo.GenerationRepo, pool *AccountPool, billing *BillingService, providers map[string]provider.Provider, priceFn PriceFunc, aes *crypto.AESGCM, proxySvc *ProxyService, cfg *SystemConfigService, routeSvc *ProviderRouteService, modelRepo *repo.ModelCatalogRepo, sourceRepo *repo.ModelSourceRepo, apiChannelRepo *repo.APIChannelRepo, apiLimiters ...*ratelimit.Limiter) *GenerationService {
 	return &GenerationService{
-		db:        db,
-		repo:      r,
-		pool:      pool,
-		billing:   billing,
-		providers: providers,
-		priceFn:   priceFn,
-		aes:       aes,
-		proxySvc:  proxySvc,
-		cfg:       cfg,
-		routeSvc:  routeSvc,
+		db:             db,
+		repo:           r,
+		pool:           pool,
+		billing:        billing,
+		providers:      providers,
+		priceFn:        priceFn,
+		aes:            aes,
+		proxySvc:       proxySvc,
+		cfg:            cfg,
+		routeSvc:       routeSvc,
+		modelRepo:      modelRepo,
+		sourceRepo:     sourceRepo,
+		apiChannelRepo: apiChannelRepo,
+		apiLimiter:     optionalAPIChannelDistributedLimiter(apiLimiters),
 	}
 }
 
@@ -104,8 +121,14 @@ func (s *GenerationService) Create(ctx context.Context, req CreateRequest) (*mod
 	if req.IdemKey == "" {
 		req.IdemKey = uuid.NewString()
 	}
-	req.Params = s.applyProviderRoute(ctx, req.Kind, req.ModelCode, req.Provider, req.Params)
-	if p := routeParamString(req.Params, routeParamProvider, req.Provider); p != "" {
+	var routeErr error
+	req.Params, routeErr = s.applyProviderRoute(ctx, req.Kind, req.ModelCode, req.Provider, req.Params)
+	if routeErr != nil {
+		return nil, routeErr
+	}
+	if sourceType := routeParamString(req.Params, routeParamSourceType, ""); sourceType == model.ModelSourceTypeAPIChannel {
+		req.Provider = generationProviderAPIChannel
+	} else if p := routeParamString(req.Params, routeParamProvider, req.Provider); p != "" {
 		req.Provider = p
 	}
 
@@ -120,6 +143,10 @@ func (s *GenerationService) Create(ctx context.Context, req CreateRequest) (*mod
 	if cost < 0 {
 		return nil, errcode.InvalidParam.WithMsg("model price not configured")
 	}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	req.Params[PricingAuditSnapshotKey] = GenerationPricingAuditSnapshot(ctx, s.cfg, s.modelRepo, req.ModelCode, req.Kind, req.Params, req.Count, cost)
 
 	taskID := newULID()
 	req.RefAssets = s.normalizeInputRefs(ctx, &model.GenerationTask{TaskID: taskID}, req.RefAssets)
@@ -221,7 +248,32 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 		}
 	}
 	for attempt := 1; attempt <= attemptLimit; attempt++ {
-		route := routes[(attempt-1)%len(routes)]
+		routeIndex := (attempt - 1) % len(routes)
+		route := routes[routeIndex]
+		route.RouteIndex = routeIndex + 1
+		route.Attempt = attempt
+		params = selectedProviderRouteAttemptParams(params, route, routeIndex+1)
+		if err := s.repo.MergeParams(ctx, t.TaskID, params); err != nil {
+			log.Warn("record provider route attempt failed", zap.Int("attempt", attempt), zap.Int("route_index", routeIndex), zap.Error(err))
+		} else if b, err := json.Marshal(params); err == nil {
+			t.Params = string(b)
+		}
+		if generationRouteSourceType(route) == model.ModelSourceTypeAPIChannel {
+			out, err := s.generateWithAPIChannelRoute(ctx, t, route, params, refs, timeout)
+			if err == nil {
+				res = out
+				break
+			}
+			lastErr = err
+			log.Warn("api channel route failed", zap.Int("attempt", attempt), zap.String("source_code", route.SourceCode), zap.String("adapter", route.Adapter), zap.String("upstream_model", route.UpstreamModel), zap.Error(err))
+			canTryNext := canRetryAPIChannelRouteError(err)
+			if attempt == attemptLimit || !canTryNext {
+				s.failTask(ctx, t, fmt.Sprintf("provider call: %v", err))
+				return
+			}
+			sleepBeforeRetry(ctx, retryDelay, attempt)
+			continue
+		}
 		prov, ok := s.providers[route.Provider]
 		if !ok {
 			lastErr = fmt.Errorf("provider not registered: %s", route.Provider)
@@ -255,7 +307,7 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 			Count:     t.Count,
 			Account:   acc,
 		}
-		provReq.UpstreamLog = s.makeUpstreamLoggerForProvider(t, acc, route.Provider)
+		provReq.UpstreamLog = s.makeUpstreamLoggerForProvider(t, acc, route.Provider, accountPoolRouteLogMeta(route))
 		if t.NegPrompt != nil {
 			provReq.NegPrompt = *t.NegPrompt
 		}
@@ -324,8 +376,15 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 		}
 		return
 	}
+	if err := validateProviderGenerationResult(t, res); err != nil {
+		releaseAcc(acc)
+		s.failTask(ctx, t, err.Error())
+		return
+	}
 	releaseAcc(acc)
-	s.pool.MarkUsed(ctx, acc.ID)
+	if acc != nil {
+		s.pool.MarkUsed(ctx, acc.ID)
+	}
 
 	results := make([]*model.GenerationResult, 0, len(res.Assets))
 	for i, a := range res.Assets {
@@ -364,24 +423,121 @@ func (s *GenerationService) runTask(ctx context.Context, t *model.GenerationTask
 	}
 	s.updateAccountUsageMeta(ctx, acc, t, len(results))
 	if t.CostPoints > 0 {
-		if err := s.billing.Settle(ctx, t.TaskID, &acc.ID); err != nil {
+		var accountID *uint64
+		if acc != nil {
+			accountID = &acc.ID
+		}
+		if err := s.billing.Settle(ctx, t.TaskID, accountID); err != nil {
 			log.Error("settle failed", zap.Error(err))
 		}
 	}
+}
+
+func validateProviderGenerationResult(t *model.GenerationTask, res *provider.Result) error {
+	if res == nil {
+		return fmt.Errorf("provider returned empty result")
+	}
+	kind := ""
+	if t != nil {
+		kind = strings.ToLower(strings.TrimSpace(t.Kind))
+	}
+	if kind != string(provider.KindImage) && kind != string(provider.KindVideo) {
+		return nil
+	}
+	if len(res.Assets) == 0 {
+		return fmt.Errorf("provider returned no output assets")
+	}
+	for i, asset := range res.Assets {
+		if strings.TrimSpace(asset.URL) == "" {
+			return fmt.Errorf("provider returned blank output asset url at index %d", i)
+		}
+	}
+	return nil
+}
+
+func (s *GenerationService) generateWithAPIChannelRoute(ctx context.Context, t *model.GenerationTask, route ProviderRoute, params map[string]any, refs []string, timeout time.Duration) (*provider.Result, error) {
+	if s.apiChannelRepo == nil {
+		return nil, fmt.Errorf("api channel repository is not initialized")
+	}
+	ch, err := s.apiChannelRepo.GetByCode(ctx, route.SourceCode)
+	if err != nil || ch == nil {
+		return nil, fmt.Errorf("api channel not found: %s", route.SourceCode)
+	}
+	if ch.Status != model.APIChannelStatusEnabled {
+		return nil, fmt.Errorf("api channel disabled: %s", route.SourceCode)
+	}
+	if t.Kind == string(provider.KindVideo) {
+		return s.generateVideoWithAPIChannelRoute(ctx, t, route, ch, params, refs, timeout)
+	}
+	if t.Kind != string(provider.KindImage) {
+		return nil, fmt.Errorf("api channel runtime currently supports image generation only")
+	}
+	imageMode := normalizeProviderRouteImageAPIMode(route.ImageAPIMode)
+	if imageMode == "" {
+		imageMode = imageAPIModeForAPIChannelAdapter(route.Adapter)
+	}
+	if imageMode == "" {
+		return nil, fmt.Errorf("api channel adapter does not support image generation: %s", route.Adapter)
+	}
+	prov, ok := s.providers[model.ProviderGPT]
+	if !ok {
+		return nil, fmt.Errorf("provider not registered: %s", model.ProviderGPT)
+	}
+	credRef, err := selectAPIChannelCredentialWithLimiter(ctx, s.apiChannelRepo, s.aes, ch, 0, s.apiLimiter)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.SetRunningNoAccount(ctx, t.TaskID); err != nil {
+		logger.FromCtx(ctx).Warn("set running for api channel failed", zap.Error(err))
+	}
+	provParams := paramsForProviderRoute(params, route)
+	provParams[providerParamImageAPIMode] = imageMode
+	provParams[routeParamImageAPIMode] = imageMode
+	provReq := &provider.Request{
+		TaskID:      t.TaskID,
+		Kind:        provider.Kind(t.Kind),
+		Mode:        provider.Mode(t.Mode),
+		ModelCode:   route.UpstreamModel,
+		Prompt:      t.Prompt,
+		Params:      provParams,
+		RefAssets:   refs,
+		Count:       t.Count,
+		Credential:  credRef.Token,
+		BaseURL:     ch.BaseURL,
+		UpstreamLog: s.makeUpstreamLoggerForAPIChannel(t, route, ch, credRef),
+	}
+	if t.NegPrompt != nil {
+		provReq.NegPrompt = *t.NegPrompt
+	}
+	if proxyURL, perr := s.resolveProxyURLByID(ctx, ch.ProxyID); perr == nil {
+		provReq.ProxyURL = proxyURL
+	} else {
+		logger.FromCtx(ctx).Warn("resolve api channel proxy failed", zap.String("channel", ch.Code), zap.Error(perr))
+	}
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result, err := prov.Generate(rctx, provReq)
+	if err != nil {
+		recordAPIChannelCredentialError(ctx, s.apiChannelRepo, credRef, err)
+		return nil, err
+	}
+	recordAPIChannelCredentialSuccess(ctx, s.apiChannelRepo, credRef)
+	return result, nil
 }
 
 func (s *GenerationService) makeUpstreamLogger(t *model.GenerationTask, acc *model.Account) provider.UpstreamLogger {
 	return s.makeUpstreamLoggerForProvider(t, acc, "")
 }
 
-func (s *GenerationService) makeUpstreamLoggerForProvider(t *model.GenerationTask, acc *model.Account, fallbackProvider string) provider.UpstreamLogger {
+func (s *GenerationService) makeUpstreamLoggerForProvider(t *model.GenerationTask, acc *model.Account, fallbackProvider string, defaultMeta ...map[string]any) provider.UpstreamLogger {
 	return func(ctx context.Context, e provider.UpstreamLogEntry) {
 		if t == nil {
 			return
 		}
+		metaMap := mergeUpstreamLogMeta(defaultMeta, e.Meta)
 		meta := ""
-		if len(e.Meta) > 0 {
-			if b, err := json.Marshal(e.Meta); err == nil {
+		if len(metaMap) > 0 {
+			if b, err := json.Marshal(metaMap); err == nil {
 				meta = string(b)
 			}
 		}
@@ -425,6 +581,95 @@ func (s *GenerationService) makeUpstreamLoggerForProvider(t *model.GenerationTas
 	}
 }
 
+func accountPoolRouteLogMeta(route ProviderRoute) map[string]any {
+	meta := map[string]any{
+		"model_gateway_source_type": model.ModelSourceTypeAccountPool,
+		"model_gateway_source_code": route.Provider,
+		"upstream_model":            route.UpstreamModel,
+		"strategy":                  normalizeRouteStrategy(route.Strategy),
+		"auth_type":                 route.AuthType,
+	}
+	addModelGatewayRouteAttemptMeta(meta, route.RouteIndex, route.Attempt)
+	if strings.TrimSpace(route.ImageAPIMode) != "" {
+		meta["image_api_mode"] = route.ImageAPIMode
+	}
+	return meta
+}
+
+func mergeUpstreamLogMeta(defaults []map[string]any, entry map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, group := range defaults {
+		for k, v := range group {
+			if strings.TrimSpace(k) == "" || isEmptyUpstreamMetaValue(v) {
+				continue
+			}
+			out[k] = v
+		}
+	}
+	for k, v := range entry {
+		if strings.TrimSpace(k) == "" || isEmptyUpstreamMetaValue(v) {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func isEmptyUpstreamMetaValue(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(x) == ""
+	default:
+		return false
+	}
+}
+
+func (s *GenerationService) makeUpstreamLoggerForAPIChannel(t *model.GenerationTask, route ProviderRoute, ch *model.APIChannel, credRef *APIChannelCredentialRef) provider.UpstreamLogger {
+	base := s.makeUpstreamLoggerForProvider(t, nil, generationProviderAPIChannel)
+	return func(ctx context.Context, e provider.UpstreamLogEntry) {
+		e.Provider = generationProviderAPIChannel
+		e.Meta = mergeUpstreamLogMeta([]map[string]any{apiChannelRouteLogMeta(route, ch, credRef)}, e.Meta)
+		base(ctx, e)
+	}
+}
+
+func apiChannelRouteLogMeta(route ProviderRoute, ch *model.APIChannel, credRef *APIChannelCredentialRef) map[string]any {
+	meta := map[string]any{
+		"model_gateway_source_type": model.ModelSourceTypeAPIChannel,
+		"model_gateway_source_code": route.SourceCode,
+		"model_gateway_adapter":     route.Adapter,
+		"upstream_model":            route.UpstreamModel,
+		"strategy":                  normalizeRouteStrategy(route.Strategy),
+		"auth_type":                 route.AuthType,
+	}
+	addModelGatewayRouteAttemptMeta(meta, route.RouteIndex, route.Attempt)
+	if strings.TrimSpace(route.ImageAPIMode) != "" {
+		meta["image_api_mode"] = route.ImageAPIMode
+	}
+	if ch != nil {
+		meta["api_channel_id"] = ch.ID
+		meta["api_channel_code"] = ch.Code
+		meta["api_channel_name"] = ch.Name
+		meta["api_channel_provider_name"] = ch.ProviderName
+	}
+	addAPIChannelCredentialMeta(meta, credRef)
+	return meta
+}
+
+func addModelGatewayRouteAttemptMeta(meta map[string]any, routeIndex, attempt int) {
+	if meta == nil {
+		return
+	}
+	if routeIndex > 0 {
+		meta["model_gateway_route_index"] = routeIndex
+	}
+	if attempt > 0 {
+		meta["model_gateway_attempt"] = attempt
+	}
+}
+
 func (s *GenerationService) providerCredential(ctx context.Context, acc *model.Account, proxyURL string) (string, error) {
 	if acc == nil {
 		return "", fmt.Errorf("missing account")
@@ -444,6 +689,14 @@ func (s *GenerationService) providerCredential(ctx context.Context, acc *model.A
 		return "", fmt.Errorf("account credential is empty")
 	}
 	return cred, nil
+}
+
+func (s *GenerationService) apiChannelCredential(ch *model.APIChannel) (string, error) {
+	ref, err := selectAPIChannelCredential(context.Background(), s.apiChannelRepo, s.aes, ch, 0)
+	if err != nil {
+		return "", err
+	}
+	return ref.Token, nil
 }
 
 func (s *GenerationService) pickAccountForTask(ctx context.Context, t *model.GenerationTask, params map[string]any) (*model.Account, error) {
@@ -530,17 +783,352 @@ func shouldUseGPTWebRoute(params map[string]any) bool {
 	return tier == "1K" || tier == "1"
 }
 
-func (s *GenerationService) applyProviderRoute(ctx context.Context, kind provider.Kind, modelCode, fallbackProvider string, params map[string]any) map[string]any {
+func (s *GenerationService) generationRoutes(ctx context.Context, kind provider.Kind, modelCode, fallbackProvider string) []ProviderRoute {
+	if routes, managed := s.modelGatewayGenerationRoutes(ctx, kind, modelCode); managed {
+		return routes
+	}
+	routes := []ProviderRoute{accountPoolProviderRoute(fallbackProvider, modelCode, "round_robin")}
+	if s.routeSvc != nil {
+		if resolved, _ := s.routeSvc.ResolveCandidates(ctx, kind, modelCode, fallbackProvider); len(resolved) > 0 {
+			routes = make([]ProviderRoute, 0, len(resolved))
+			for _, route := range resolved {
+				route.SourceType = model.ModelSourceTypeAccountPool
+				route.SourceCode = route.Provider
+				routes = appendProviderRouteCandidate(routes, route)
+			}
+		}
+	}
+	return routes
+}
+
+func (s *GenerationService) modelGatewayGenerationRoutes(ctx context.Context, kind provider.Kind, modelCode string) ([]ProviderRoute, bool) {
+	if s.modelRepo == nil || s.sourceRepo == nil {
+		return nil, false
+	}
+	item, err := s.modelRepo.GetByCode(ctx, modelCode)
+	if err != nil || item == nil || item.Status != model.ModelCatalogStatusEnabled {
+		return nil, false
+	}
+	entryKind := normalizeModelGatewayKindLoose(item.EntryKind)
+	if !modelGatewayEntryKindMatchesGenerationKind(entryKind, kind) {
+		return nil, false
+	}
+	status := int8(model.ModelSourceStatusEnabled)
+	sources, _, err := s.sourceRepo.List(ctx, repo.ModelSourceListFilter{ModelCode: modelCode, Status: &status, Page: 1, PageSize: 500})
+	if err != nil {
+		logger.FromCtx(ctx).Warn("generation.model_gateway.list_sources", zap.String("model", modelCode), zap.Error(err))
+		return nil, false
+	}
+	if len(sources) == 0 {
+		return nil, false
+	}
+	routes := make([]ProviderRoute, 0, len(sources))
+	for _, source := range sources {
+		if source == nil {
+			continue
+		}
+		switch source.SourceType {
+		case model.ModelSourceTypeAPIChannel:
+			if route, ok := s.apiChannelGenerationRoute(ctx, item, entryKind, kind, source); ok {
+				routes = appendProviderRouteCandidate(routes, route)
+			}
+		case model.ModelSourceTypeAccountPool:
+			if route, ok := accountPoolGenerationRoute(item, source); ok {
+				routes = appendProviderRouteCandidate(routes, route)
+			}
+		}
+	}
+	return orderProviderRoutesForRuntime(modelCode, string(kind), routes), true
+}
+
+func (s *GenerationService) apiChannelGenerationRoute(ctx context.Context, item *model.ModelCatalog, entryKind string, kind provider.Kind, source *model.ModelSourceMapping) (ProviderRoute, bool) {
+	if s.apiChannelRepo == nil || (kind != provider.KindImage && kind != provider.KindVideo) {
+		return ProviderRoute{}, false
+	}
+	ch, err := s.apiChannelRepo.GetByCode(ctx, source.SourceCode)
+	if err != nil || ch == nil || ch.Status != model.APIChannelStatusEnabled {
+		return ProviderRoute{}, false
+	}
+	upstreamModel := effectiveModelGatewayUpstreamModel(item, source.UpstreamModel)
+	adapter := strings.TrimSpace(source.Adapter)
+	if adapter == "" {
+		adapter = ch.Adapter
+	}
+	imageMode := strings.TrimSpace(source.ImageAPIMode)
+	if imageMode == "" && kind == provider.KindImage {
+		imageMode = imageAPIModeForAPIChannelAdapter(adapter)
+	}
+	if kind == provider.KindImage && imageMode == "" {
+		return ProviderRoute{}, false
+	}
+	if kind == provider.KindVideo && adapter != model.APIChannelAdapterOpenAIVideo {
+		return ProviderRoute{}, false
+	}
+	if !modelGatewayListAllows(parseStringListJSON(ch.Models), item.ModelCode, upstreamModel) {
+		return ProviderRoute{}, false
+	}
+	if !modelGatewayCapabilityAllows(parseStringListJSON(ch.Capabilities), entryKind) {
+		return ProviderRoute{}, false
+	}
+	if reason := apiChannelOperationalSkipReason(inspectAPIChannelOperational(ctx, s.apiChannelRepo, source.SourceCode)); reason != "" {
+		return ProviderRoute{}, false
+	}
+	return ProviderRoute{
+		SourceType:    model.ModelSourceTypeAPIChannel,
+		SourceCode:    source.SourceCode,
+		Adapter:       adapter,
+		Provider:      model.ProviderGPT,
+		UpstreamModel: upstreamModel,
+		Strategy:      normalizeRouteStrategy(source.Strategy),
+		AuthType:      source.AuthType,
+		ImageAPIMode:  imageMode,
+		Weight:        normalizeRuntimeRouteWeight(source.Weight),
+		Priority:      normalizeRuntimeRoutePriority(source.Priority),
+	}, true
+}
+
+func accountPoolGenerationRoute(item *model.ModelCatalog, source *model.ModelSourceMapping) (ProviderRoute, bool) {
+	providerName := strings.TrimSpace(source.SourceCode)
+	if providerName != model.ProviderGPT && providerName != model.ProviderGROK {
+		return ProviderRoute{}, false
+	}
+	upstreamModel := effectiveModelGatewayUpstreamModel(item, source.UpstreamModel)
+	if accountPoolSourceMismatchReason(item, providerName, upstreamModel) != "" {
+		return ProviderRoute{}, false
+	}
+	return ProviderRoute{
+		SourceType:    model.ModelSourceTypeAccountPool,
+		SourceCode:    providerName,
+		Provider:      providerName,
+		UpstreamModel: upstreamModel,
+		Strategy:      normalizeRouteStrategy(source.Strategy),
+		AuthType:      source.AuthType,
+		ImageAPIMode:  source.ImageAPIMode,
+		Weight:        normalizeRuntimeRouteWeight(source.Weight),
+		Priority:      normalizeRuntimeRoutePriority(source.Priority),
+	}, true
+}
+
+func (s *GenerationService) generationSkippedCandidates(ctx context.Context, kind provider.Kind, modelCode string) []ProviderRoute {
+	if s.modelRepo == nil || s.sourceRepo == nil {
+		return nil
+	}
+	item, err := s.modelRepo.GetByCode(ctx, modelCode)
+	if err != nil || item == nil || item.Status != model.ModelCatalogStatusEnabled {
+		return nil
+	}
+	entryKind := normalizeModelGatewayKindLoose(item.EntryKind)
+	if !modelGatewayEntryKindMatchesGenerationKind(entryKind, kind) {
+		return nil
+	}
+	sources, _, err := s.sourceRepo.List(ctx, repo.ModelSourceListFilter{ModelCode: modelCode, Page: 1, PageSize: 500})
+	if err != nil {
+		return nil
+	}
+	out := make([]ProviderRoute, 0)
+	for _, source := range sources {
+		if source == nil {
+			continue
+		}
+		if skipped := s.generationSkippedCandidate(ctx, item, entryKind, kind, source); skipped.SkipReason != "" {
+			out = append(out, skipped)
+		}
+	}
+	return out
+}
+
+func (s *GenerationService) generationSkippedCandidate(ctx context.Context, item *model.ModelCatalog, entryKind string, kind provider.Kind, source *model.ModelSourceMapping) ProviderRoute {
+	route := ProviderRoute{
+		SourceType:    source.SourceType,
+		SourceCode:    source.SourceCode,
+		Adapter:       strings.TrimSpace(source.Adapter),
+		UpstreamModel: effectiveModelGatewayUpstreamModel(item, source.UpstreamModel),
+		Strategy:      normalizeRouteStrategy(source.Strategy),
+		AuthType:      source.AuthType,
+		ImageAPIMode:  source.ImageAPIMode,
+		Weight:        normalizeRuntimeRouteWeight(source.Weight),
+		Priority:      normalizeRuntimeRoutePriority(source.Priority),
+	}
+	if source.Status != model.ModelSourceStatusEnabled {
+		route.SkipReason = "来源映射已停用"
+		return route
+	}
+	switch source.SourceType {
+	case model.ModelSourceTypeAPIChannel:
+		return s.apiChannelGenerationSkippedCandidate(ctx, item, entryKind, kind, source, route)
+	case model.ModelSourceTypeAccountPool:
+		return accountPoolGenerationSkippedCandidate(item, source, route)
+	default:
+		route.SkipReason = "来源类型不支持"
+		return route
+	}
+}
+
+func (s *GenerationService) apiChannelGenerationSkippedCandidate(ctx context.Context, item *model.ModelCatalog, entryKind string, kind provider.Kind, source *model.ModelSourceMapping, route ProviderRoute) ProviderRoute {
+	if s.apiChannelRepo == nil {
+		route.SkipReason = "API 渠道仓储未初始化"
+		return route
+	}
+	if kind != provider.KindImage && kind != provider.KindVideo {
+		route.SkipReason = "API 渠道暂不支持该入口运行时"
+		return route
+	}
+	ch, err := s.apiChannelRepo.GetByCode(ctx, source.SourceCode)
+	if err != nil || ch == nil {
+		route.SkipReason = "API 渠道不存在或已删除"
+		return route
+	}
+	if route.Adapter == "" {
+		route.Adapter = ch.Adapter
+	}
+	if route.ImageAPIMode == "" && kind == provider.KindImage {
+		route.ImageAPIMode = imageAPIModeForAPIChannelAdapter(route.Adapter)
+	}
+	if ch.Status != model.APIChannelStatusEnabled {
+		route.SkipReason = "API 渠道已停用"
+		return route
+	}
+	if kind == provider.KindImage && route.ImageAPIMode == "" {
+		route.SkipReason = "API 渠道协议不支持图片运行时"
+		return route
+	}
+	if kind == provider.KindVideo && route.Adapter != model.APIChannelAdapterOpenAIVideo {
+		route.SkipReason = "API 渠道协议不支持视频运行时"
+		return route
+	}
+	if !modelGatewayListAllows(parseStringListJSON(ch.Models), item.ModelCode, route.UpstreamModel) {
+		route.SkipReason = "API 渠道模型白名单不包含该模型"
+		return route
+	}
+	if !modelGatewayCapabilityAllows(parseStringListJSON(ch.Capabilities), entryKind) {
+		route.SkipReason = "API 渠道能力不匹配"
+		return route
+	}
+	if reason := apiChannelOperationalSkipReason(inspectAPIChannelOperational(ctx, s.apiChannelRepo, source.SourceCode)); reason != "" {
+		route.SkipReason = reason
+		return route
+	}
+	return ProviderRoute{}
+}
+
+func accountPoolGenerationSkippedCandidate(item *model.ModelCatalog, source *model.ModelSourceMapping, route ProviderRoute) ProviderRoute {
+	providerName := strings.TrimSpace(source.SourceCode)
+	if providerName != model.ProviderGPT && providerName != model.ProviderGROK {
+		route.SkipReason = "账号池来源只支持 GPT 或 GROK"
+		return route
+	}
+	route.Provider = providerName
+	if reason := accountPoolSourceMismatchReason(item, providerName, route.UpstreamModel); reason != "" {
+		route.SkipReason = reason
+		return route
+	}
+	return ProviderRoute{}
+}
+
+func accountPoolProviderRoute(providerName, modelCode, strategy string) ProviderRoute {
+	return ProviderRoute{
+		SourceType:    model.ModelSourceTypeAccountPool,
+		SourceCode:    strings.TrimSpace(providerName),
+		Provider:      strings.TrimSpace(providerName),
+		UpstreamModel: strings.TrimSpace(modelCode),
+		Strategy:      normalizeRouteStrategy(strategy),
+	}
+}
+
+func modelGatewayEntryKindMatchesGenerationKind(entryKind string, kind provider.Kind) bool {
+	switch kind {
+	case provider.KindImage:
+		return entryKind == model.ModelCatalogKindImage
+	case provider.KindVideo:
+		return entryKind == model.ModelCatalogKindVideo
+	default:
+		return false
+	}
+}
+
+func effectiveModelGatewayUpstreamModel(item *model.ModelCatalog, sourceUpstream string) string {
+	upstreamModel := strings.TrimSpace(sourceUpstream)
+	if upstreamModel == "" && item != nil {
+		upstreamModel = strings.TrimSpace(item.UpstreamDefaultModel)
+	}
+	if upstreamModel == "" && item != nil {
+		upstreamModel = item.ModelCode
+	}
+	return upstreamModel
+}
+
+func imageAPIModeForAPIChannelAdapter(adapter string) string {
+	switch strings.TrimSpace(adapter) {
+	case model.APIChannelAdapterOpenAIImages:
+		return ProviderRouteImageAPIModeOpenAIImages
+	case model.APIChannelAdapterOpenAIResponses:
+		return ProviderRouteImageAPIModeOpenAIResponses
+	case model.APIChannelAdapterNovaAsync:
+		return ProviderRouteImageAPIModeNovaAsync
+	case model.APIChannelAdapterPic2APIImages:
+		return ProviderRouteImageAPIModePic2API
+	default:
+		return ""
+	}
+}
+
+func isAPIChannelRouteUnavailableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "api channel repository is not initialized") ||
+		strings.Contains(msg, "api channel is nil") ||
+		strings.Contains(msg, "api channel not found") ||
+		strings.Contains(msg, "api channel disabled") ||
+		strings.Contains(msg, "api channel adapter does not support") ||
+		strings.Contains(msg, "api channel runtime currently supports") ||
+		strings.Contains(msg, "api channel missing credential") ||
+		strings.Contains(msg, "decrypt api channel credential failed") ||
+		strings.Contains(msg, "provider not registered")
+}
+
+func canRetryAPIChannelRouteError(err error) bool {
+	if isAPIChannelVideoAcceptedError(err) {
+		return false
+	}
+	return retryableProviderError(err) || isAPIChannelRouteUnavailableError(err)
+}
+
+func generationRouteSourceType(route ProviderRoute) string {
+	sourceType := strings.TrimSpace(route.SourceType)
+	if sourceType != "" {
+		return sourceType
+	}
+	sourceCode := strings.TrimSpace(route.SourceCode)
+	if sourceCode == model.ProviderGPT || sourceCode == model.ProviderGROK {
+		return model.ModelSourceTypeAccountPool
+	}
+	if sourceCode != "" || strings.TrimSpace(route.Adapter) != "" {
+		return model.ModelSourceTypeAPIChannel
+	}
+	return model.ModelSourceTypeAccountPool
+}
+
+func (s *GenerationService) applyProviderRoute(ctx context.Context, kind provider.Kind, modelCode, fallbackProvider string, params map[string]any) (map[string]any, error) {
 	if params == nil {
 		params = map[string]any{}
 	}
-	routes := []ProviderRoute{{Provider: fallbackProvider, UpstreamModel: modelCode, Strategy: "round_robin"}}
-	if s.routeSvc != nil {
-		if resolved, _ := s.routeSvc.ResolveCandidates(ctx, kind, modelCode, fallbackProvider); len(resolved) > 0 {
-			routes = resolved
-		}
+	routes := s.generationRoutes(ctx, kind, modelCode, fallbackProvider)
+	if len(routes) == 0 {
+		return params, errcode.InvalidParam.WithMsg("模型库已启用，但当前没有可用生成来源")
 	}
+	skipped := s.generationSkippedCandidates(ctx, kind, modelCode)
 	route := routes[0]
+	if sourceType := generationRouteSourceType(route); sourceType != "" {
+		params[routeParamSourceType] = sourceType
+	}
+	if sourceCode := strings.TrimSpace(route.SourceCode); sourceCode != "" {
+		params[routeParamSourceCode] = sourceCode
+	}
+	if adapter := strings.TrimSpace(route.Adapter); adapter != "" {
+		params[routeParamAdapter] = adapter
+	}
 	if route.Provider != "" {
 		params[routeParamProvider] = route.Provider
 	}
@@ -558,11 +1146,15 @@ func (s *GenerationService) applyProviderRoute(ctx context.Context, kind provide
 		params[providerParamImageAPIMode] = route.ImageAPIMode
 	}
 	params[routeParamCandidates] = routes
-	return params
+	params[routeParamSnapshot] = providerRouteSnapshotPayload(modelCode, string(kind), routes, 1, skipped)
+	return params, nil
 }
 
 func providerRouteFromParams(params map[string]any, fallbackProvider, modelCode string) ProviderRoute {
 	return ProviderRoute{
+		SourceType:    routeParamString(params, routeParamSourceType, ""),
+		SourceCode:    routeParamString(params, routeParamSourceCode, ""),
+		Adapter:       routeParamString(params, routeParamAdapter, ""),
 		Provider:      routeParamString(params, routeParamProvider, fallbackProvider),
 		UpstreamModel: routeParamString(params, routeParamUpstreamModel, modelCode),
 		Strategy:      normalizeRouteStrategy(routeParamString(params, routeParamStrategy, "round_robin")),
@@ -599,6 +1191,9 @@ func decodeProviderRouteCandidates(raw any, modelCode string) []ProviderRoute {
 				appendRoute(providerRouteFromCandidateMap(x))
 			case map[string]string:
 				appendRoute(ProviderRoute{
+					SourceType:    x["source_type"],
+					SourceCode:    x["source_code"],
+					Adapter:       x["adapter"],
 					Provider:      x["provider"],
 					UpstreamModel: x["upstream_model"],
 					AuthType:      x["auth_type"],
@@ -620,12 +1215,90 @@ func decodeProviderRouteCandidates(raw any, modelCode string) []ProviderRoute {
 
 func providerRouteFromCandidateMap(m map[string]any) ProviderRoute {
 	return ProviderRoute{
+		SourceType:    strFromMap(m, "source_type"),
+		SourceCode:    strFromMap(m, "source_code"),
+		Adapter:       strFromMap(m, "adapter"),
 		Provider:      strFromMap(m, "provider"),
 		UpstreamModel: strFromMap(m, "upstream_model"),
 		AuthType:      strFromMap(m, "auth_type"),
 		ImageAPIMode:  strFromMap(m, "image_api_mode"),
 		Strategy:      strFromMap(m, "strategy"),
+		Weight:        intFromMap(m, "weight"),
+		Priority:      intFromMap(m, "priority"),
 	}
+}
+
+func providerRouteSnapshotPayload(modelCode, kind string, routes []ProviderRoute, selectedIndex int, skipped ...[]ProviderRoute) map[string]any {
+	candidates := make([]map[string]any, 0, len(routes))
+	for idx, route := range routes {
+		candidates = append(candidates, map[string]any{
+			"index":          idx + 1,
+			"source_type":    generationRouteSourceType(route),
+			"source_code":    route.SourceCode,
+			"provider":       route.Provider,
+			"adapter":        route.Adapter,
+			"upstream_model": route.UpstreamModel,
+			"strategy":       normalizeRouteStrategy(route.Strategy),
+			"auth_type":      route.AuthType,
+			"image_api_mode": route.ImageAPIMode,
+			"priority":       normalizeRuntimeRoutePriority(route.Priority),
+			"weight":         normalizeRuntimeRouteWeight(route.Weight),
+		})
+	}
+	skippedCandidates := make([]map[string]any, 0)
+	if len(skipped) > 0 {
+		for idx, route := range skipped[0] {
+			skippedCandidates = append(skippedCandidates, map[string]any{
+				"index":          idx + 1,
+				"source_type":    generationRouteSourceType(route),
+				"source_code":    route.SourceCode,
+				"provider":       route.Provider,
+				"adapter":        route.Adapter,
+				"upstream_model": route.UpstreamModel,
+				"strategy":       normalizeRouteStrategy(route.Strategy),
+				"auth_type":      route.AuthType,
+				"image_api_mode": route.ImageAPIMode,
+				"priority":       normalizeRuntimeRoutePriority(route.Priority),
+				"weight":         normalizeRuntimeRouteWeight(route.Weight),
+				"skip_reason":    route.SkipReason,
+			})
+		}
+	}
+	payload := map[string]any{
+		"version":         1,
+		"model_code":      modelCode,
+		"kind":            kind,
+		"selected_index":  selectedIndex,
+		"candidate_count": len(candidates),
+		"candidates":      candidates,
+	}
+	if len(skippedCandidates) > 0 {
+		payload["skipped_count"] = len(skippedCandidates)
+		payload["skipped_candidates"] = skippedCandidates
+	}
+	return payload
+}
+
+func selectedProviderRouteAttemptParams(params map[string]any, route ProviderRoute, selectedIndex int) map[string]any {
+	out := paramsForProviderRoute(params, route)
+	if snapshot, ok := routeSnapshotMap(out[routeParamSnapshot]); ok {
+		snapshot["selected_index"] = selectedIndex
+		out[routeParamSnapshot] = snapshot
+	}
+	return out
+}
+
+func routeSnapshotMap(raw any) (map[string]any, bool) {
+	switch v := raw.(type) {
+	case map[string]any:
+		return v, true
+	case string:
+		var out map[string]any
+		if err := json.Unmarshal([]byte(v), &out); err == nil && out != nil {
+			return out, true
+		}
+	}
+	return nil, false
 }
 
 func paramsForProviderRoute(params map[string]any, route ProviderRoute) map[string]any {
@@ -635,6 +1308,21 @@ func paramsForProviderRoute(params map[string]any, route ProviderRoute) map[stri
 	}
 	if route.Provider != "" {
 		out[routeParamProvider] = route.Provider
+	}
+	if sourceType := generationRouteSourceType(route); sourceType != "" {
+		out[routeParamSourceType] = sourceType
+	} else {
+		delete(out, routeParamSourceType)
+	}
+	if route.SourceCode != "" {
+		out[routeParamSourceCode] = route.SourceCode
+	} else {
+		delete(out, routeParamSourceCode)
+	}
+	if route.Adapter != "" {
+		out[routeParamAdapter] = route.Adapter
+	} else {
+		delete(out, routeParamAdapter)
 	}
 	if route.UpstreamModel != "" {
 		out[routeParamUpstreamModel] = route.UpstreamModel
@@ -991,6 +1679,13 @@ func (s *GenerationService) accessTokenNeedsRefresh(ctx context.Context, acc *mo
 }
 
 func (s *GenerationService) resolveProxyURL(ctx context.Context, acc *model.Account) (string, error) {
+	if acc != nil && acc.ProxyID != nil {
+		return s.resolveProxyURLByID(ctx, acc.ProxyID)
+	}
+	return s.resolveProxyURLByID(ctx, nil)
+}
+
+func (s *GenerationService) resolveProxyURLByID(ctx context.Context, proxyID *uint64) (string, error) {
 	if s.proxySvc == nil || s.cfg == nil {
 		return "", nil
 	}
@@ -998,8 +1693,8 @@ func (s *GenerationService) resolveProxyURL(ctx context.Context, acc *model.Acco
 		p   *model.Proxy
 		err error
 	)
-	if acc != nil && acc.ProxyID != nil {
-		p, err = s.proxySvc.GetByID(ctx, *acc.ProxyID)
+	if proxyID != nil {
+		p, err = s.proxySvc.GetByID(ctx, *proxyID)
 	} else if s.cfg.GlobalProxyEnabled(ctx) {
 		if s.cfg.GlobalProxySelectionMode(ctx) == "random" {
 			p, err = s.proxySvc.PickEnabledRandom(ctx)
@@ -1322,6 +2017,9 @@ func (s *GenerationService) failTask(ctx context.Context, t *model.GenerationTas
 	if err := s.repo.SetFailed(ctx, t.TaskID, displayReason); err != nil {
 		logger.FromCtx(ctx).Warn("gen.fail.update_status", zap.Error(err))
 	}
+	_ = s.repo.MergeParams(ctx, t.TaskID, map[string]any{
+		PricingAuditSnapshotKey: PricingFailureRefundPatch(t.CostPoints, displayReason),
+	})
 	if t.CostPoints > 0 {
 		if err := s.billing.FailRefund(ctx, t.TaskID, displayReason); err != nil {
 			logger.FromCtx(ctx).Warn("gen.fail.refund", zap.Error(err))

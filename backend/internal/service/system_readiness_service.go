@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/kleinai/backend/internal/dto"
+	"github.com/kleinai/backend/internal/model"
+	"github.com/kleinai/backend/internal/repo"
 	"github.com/kleinai/backend/pkg/config"
 )
 
@@ -20,12 +22,35 @@ const (
 )
 
 type SystemReadinessService struct {
-	cfg *config.Config
-	sys *SystemConfigService
+	cfg        *config.Config
+	sys        *SystemConfigService
+	modelRepo  readinessModelCatalogLister
+	sourceRepo readinessModelSourceLister
+	apiRepo    apiChannelOperationalRepo
 }
 
-func NewSystemReadinessService(cfg *config.Config, sys *SystemConfigService) *SystemReadinessService {
-	return &SystemReadinessService{cfg: cfg, sys: sys}
+type readinessModelCatalogLister interface {
+	List(ctx context.Context, f repo.ModelCatalogListFilter) ([]*model.ModelCatalog, int64, error)
+}
+
+type readinessModelSourceLister interface {
+	List(ctx context.Context, f repo.ModelSourceListFilter) ([]*model.ModelSourceMapping, int64, error)
+}
+
+type SystemReadinessModelGatewayDeps struct {
+	ModelRepo  readinessModelCatalogLister
+	SourceRepo readinessModelSourceLister
+	APIRepo    apiChannelOperationalRepo
+}
+
+func NewSystemReadinessService(cfg *config.Config, sys *SystemConfigService, deps ...SystemReadinessModelGatewayDeps) *SystemReadinessService {
+	s := &SystemReadinessService{cfg: cfg, sys: sys}
+	if len(deps) > 0 {
+		s.modelRepo = deps[0].ModelRepo
+		s.sourceRepo = deps[0].SourceRepo
+		s.apiRepo = deps[0].APIRepo
+	}
+	return s
 }
 
 func (s *SystemReadinessService) Check(ctx context.Context) (*dto.AdminSystemReadinessResp, error) {
@@ -34,7 +59,9 @@ func (s *SystemReadinessService) Check(ctx context.Context) (*dto.AdminSystemRea
 	checks = append(checks, s.smtpChecks(ctx)...)
 	checks = append(checks, s.humanVerificationChecks(ctx)...)
 	checks = append(checks, s.paymentChecks(ctx)...)
-	checks = append(checks, s.providerRouteChecks(ctx)...)
+	modelGatewayChecks, modelGatewayManaged := s.modelGatewayChecks(ctx)
+	checks = append(checks, modelGatewayChecks...)
+	checks = append(checks, s.providerRouteChecks(ctx, modelGatewayManaged)...)
 	checks = append(checks, s.storageChecks(ctx)...)
 
 	summary := dto.AdminSystemReadinessSummary{}
@@ -168,26 +195,431 @@ func (s *SystemReadinessService) paymentChecks(ctx context.Context) []dto.AdminS
 	return checks
 }
 
-func (s *SystemReadinessService) providerRouteChecks(ctx context.Context) []dto.AdminSystemReadinessCheck {
+func (s *SystemReadinessService) modelGatewayChecks(ctx context.Context) ([]dto.AdminSystemReadinessCheck, bool) {
+	if s.modelRepo == nil || s.sourceRepo == nil {
+		return nil, false
+	}
+	statusEnabled := int8(model.ModelCatalogStatusEnabled)
+	visibleEnabled := int8(1)
+	models, modelTotal, err := s.listReadinessCatalogModels(ctx, repo.ModelCatalogListFilter{
+		Status:  &statusEnabled,
+		Visible: &visibleEnabled,
+	})
+	if err != nil {
+		return []dto.AdminSystemReadinessCheck{
+			errorCheck("model_gateway", "catalog_query", "模型库", fmt.Sprintf("读取模型库失败: %v", err), "model_catalog", false),
+		}, false
+	}
+	sources, sourceTotal, err := s.listReadinessSources(ctx, repo.ModelSourceListFilter{Status: &statusEnabled})
+	if err != nil {
+		return []dto.AdminSystemReadinessCheck{
+			errorCheck("model_gateway", "source_query", "模型来源映射", fmt.Sprintf("读取模型来源映射失败: %v", err), "model_source_mapping", false),
+		}, false
+	}
+	allSources, _, allSourceErr := s.listReadinessSources(ctx, repo.ModelSourceListFilter{})
+	if allSourceErr != nil {
+		allSources = sources
+	}
+
+	sourceByModel := map[string]int{}
+	apiChannelSourceCodes := map[string]struct{}{}
+	apiChannelSources := 0
+	for _, source := range sources {
+		if source == nil {
+			continue
+		}
+		sourceByModel[source.ModelCode]++
+		if source.SourceType == model.ModelSourceTypeAPIChannel {
+			apiChannelSources++
+			if strings.TrimSpace(source.SourceCode) != "" {
+				apiChannelSourceCodes[strings.TrimSpace(source.SourceCode)] = struct{}{}
+			}
+		}
+	}
+	modelsByKind := map[string]int{}
+	coveredByKind := map[string]int{}
+	modelsByCode := map[string]*model.ModelCatalog{}
+	for _, item := range models {
+		if item == nil {
+			continue
+		}
+		modelsByCode[item.ModelCode] = item
+		kind := readinessModelGatewayKind(item.EntryKind)
+		if kind == "" {
+			continue
+		}
+		modelsByKind[kind]++
+		if sourceByModel[item.ModelCode] > 0 {
+			coveredByKind[kind]++
+		}
+	}
+
+	checks := []dto.AdminSystemReadinessCheck{
+		boolCheck(
+			"model_gateway",
+			"catalog",
+			"模型库",
+			modelTotal > 0,
+			fmt.Sprintf("已配置 %d 个启用可见模型", modelTotal),
+			"模型库暂无启用可见模型；前台/兼容模型列表会回退旧配置或默认模型",
+			"model_catalog",
+			false,
+		),
+		boolCheck(
+			"model_gateway",
+			"sources",
+			"模型来源映射",
+			sourceTotal > 0,
+			fmt.Sprintf("已配置 %d 条启用来源映射", sourceTotal),
+			"模型来源映射为空；已接入模型无法按 Model Gateway 选择 API 渠道或账号池",
+			"model_source_mapping",
+			false,
+		),
+		boolCheck(
+			"model_gateway",
+			"api_channel_sources",
+			"API 渠道来源",
+			apiChannelSources > 0,
+			fmt.Sprintf("已配置 %d 条 API Channel 来源映射", apiChannelSources),
+			"尚未配置 API Channel 来源；MiMo / DeepSeek 等官方 API 模型不会走独立 API 渠道",
+			"model_source_mapping",
+			false,
+		),
+	}
+	sourceConflicts := readinessAccountPoolSourceConflicts(modelsByCode, sources)
+	checks = append(checks, boolCheck(
+		"model_gateway",
+		"source_conflicts",
+		"模型来源错配",
+		len(sourceConflicts) == 0,
+		"未发现启用模型误挂账号池来源",
+		fmt.Sprintf("发现 %d 条来源错配：%s", len(sourceConflicts), readinessSourceConflictSummary(sourceConflicts)),
+		"model_source_mapping",
+		false,
+	))
+	if allSourceErr != nil {
+		checks = append(checks, errorCheck("model_gateway", "source_duplicate_query", "重复来源映射", fmt.Sprintf("读取全量来源映射失败: %v", allSourceErr), "model_source_mapping", false))
+	} else {
+		sourceDuplicates := readinessDuplicateModelSources(modelsByCode, allSources)
+		checks = append(checks, boolCheck(
+			"model_gateway",
+			"source_duplicates",
+			"重复来源映射",
+			len(sourceDuplicates) == 0,
+			"未发现重复来源映射",
+			fmt.Sprintf("发现 %d 组重复来源映射：%s", len(sourceDuplicates), readinessSourceDuplicateSummary(sourceDuplicates)),
+			"model_source_mapping",
+			false,
+		))
+	}
+	checks = append(checks, s.apiChannelOperationalChecks(ctx, apiChannelSources, apiChannelSourceCodes)...)
+	for _, kind := range []string{"image", "text", "video"} {
+		modelCount := modelsByKind[kind]
+		coveredCount := coveredByKind[kind]
+		label := routeKindLabel(kind)
+		switch {
+		case modelCount == 0:
+			checks = append(checks, warnCheck("model_gateway", "kind_"+kind, label, "模型库尚无启用可见模型", "model_catalog", false))
+		case coveredCount == modelCount:
+			checks = append(checks, okCheck("model_gateway", "kind_"+kind, label, fmt.Sprintf("已覆盖 %d/%d 个启用模型", coveredCount, modelCount), "model_source_mapping", false))
+		default:
+			checks = append(checks, warnCheck("model_gateway", "kind_"+kind, label, fmt.Sprintf("仅覆盖 %d/%d 个启用模型，未覆盖模型会走兼容兜底或失败", coveredCount, modelCount), "model_source_mapping", false))
+		}
+	}
+	return checks, modelTotal > 0 && sourceTotal > 0
+}
+
+type readinessSourceConflict struct {
+	ModelCode  string
+	SourceCode string
+	Reason     string
+}
+
+type readinessSourceDuplicate struct {
+	ModelCode     string
+	SourceType    string
+	SourceCode    string
+	UpstreamModel string
+	FirstID       uint64
+	DuplicateID   uint64
+}
+
+func readinessAccountPoolSourceConflicts(modelsByCode map[string]*model.ModelCatalog, sources []*model.ModelSourceMapping) []readinessSourceConflict {
+	out := []readinessSourceConflict{}
+	for _, source := range sources {
+		if source == nil || source.SourceType != model.ModelSourceTypeAccountPool {
+			continue
+		}
+		item := modelsByCode[strings.TrimSpace(source.ModelCode)]
+		if item == nil {
+			continue
+		}
+		upstreamModel := strings.TrimSpace(source.UpstreamModel)
+		if upstreamModel == "" {
+			upstreamModel = strings.TrimSpace(item.UpstreamDefaultModel)
+		}
+		if upstreamModel == "" {
+			upstreamModel = item.ModelCode
+		}
+		if reason := accountPoolSourceMismatchReason(item, strings.TrimSpace(source.SourceCode), upstreamModel); reason != "" {
+			out = append(out, readinessSourceConflict{
+				ModelCode:  item.ModelCode,
+				SourceCode: strings.TrimSpace(source.SourceCode),
+				Reason:     reason,
+			})
+		}
+	}
+	return out
+}
+
+func readinessSourceConflictSummary(conflicts []readinessSourceConflict) string {
+	if len(conflicts) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, min(len(conflicts), 3))
+	for idx, item := range conflicts {
+		if idx >= 3 {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s -> %s（%s）", item.ModelCode, item.SourceCode, item.Reason))
+	}
+	if len(conflicts) > len(parts) {
+		parts = append(parts, fmt.Sprintf("另有 %d 条", len(conflicts)-len(parts)))
+	}
+	return strings.Join(parts, "；")
+}
+
+func readinessDuplicateModelSources(modelsByCode map[string]*model.ModelCatalog, sources []*model.ModelSourceMapping) []readinessSourceDuplicate {
+	seen := map[modelSourceRouteSignature]*model.ModelSourceMapping{}
+	out := []readinessSourceDuplicate{}
+	for _, source := range sources {
+		if source == nil {
+			continue
+		}
+		modelCode := strings.TrimSpace(source.ModelCode)
+		item := modelsByCode[modelCode]
+		if item == nil {
+			continue
+		}
+		sig := modelSourceSignature(item, modelCode, source.SourceType, source.SourceCode, source.UpstreamModel, source.Adapter, source.AuthType, source.ImageAPIMode)
+		if previous := seen[sig]; previous != nil {
+			out = append(out, readinessSourceDuplicate{
+				ModelCode:     item.ModelCode,
+				SourceType:    strings.TrimSpace(source.SourceType),
+				SourceCode:    strings.TrimSpace(source.SourceCode),
+				UpstreamModel: effectiveModelSourceUpstream(item, source.UpstreamModel),
+				FirstID:       previous.ID,
+				DuplicateID:   source.ID,
+			})
+			continue
+		}
+		seen[sig] = source
+	}
+	return out
+}
+
+func readinessSourceDuplicateSummary(duplicates []readinessSourceDuplicate) string {
+	if len(duplicates) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, min(len(duplicates), 3))
+	for idx, item := range duplicates {
+		if idx >= 3 {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s -> %s/%s/%s（ID %d 与 %d）", item.ModelCode, item.SourceType, item.SourceCode, item.UpstreamModel, item.FirstID, item.DuplicateID))
+	}
+	if len(duplicates) > len(parts) {
+		parts = append(parts, fmt.Sprintf("另有 %d 组", len(duplicates)-len(parts)))
+	}
+	return strings.Join(parts, "；")
+}
+
+func (s *SystemReadinessService) apiChannelOperationalChecks(ctx context.Context, sourceRows int, sourceCodes map[string]struct{}) []dto.AdminSystemReadinessCheck {
+	if sourceRows <= 0 {
+		return nil
+	}
+	if s.apiRepo == nil {
+		return []dto.AdminSystemReadinessCheck{
+			warnCheck("model_gateway", "api_channel_health", "API 渠道健康", "体检未注入 API Channel 仓储，无法校验映射渠道健康状态", "api_channel", false),
+			warnCheck("model_gateway", "api_channel_credentials", "API 渠道凭证", "体检未注入 API Channel 仓储，无法校验映射渠道 API 凭证", "api_channel", false),
+			warnCheck("model_gateway", "api_channel_key_pool", "API Key Pool", "体检未注入 API Channel 仓储，无法校验映射渠道是否已迁移到 Key Pool", "api_channel", false),
+		}
+	}
+	mapped := len(sourceCodes)
+	if mapped == 0 {
+		return []dto.AdminSystemReadinessCheck{
+			warnCheck("model_gateway", "api_channel_health", "API 渠道健康", "API Channel 来源映射缺少来源编码", "model_source_mapping", false),
+			warnCheck("model_gateway", "api_channel_credentials", "API 渠道凭证", "API Channel 来源映射缺少来源编码，无法校验 API 凭证", "model_source_mapping", false),
+			warnCheck("model_gateway", "api_channel_key_pool", "API Key Pool", "API Channel 来源映射缺少来源编码，无法校验 Key Pool 迁移状态", "model_source_mapping", false),
+		}
+	}
+	healthOK := 0
+	credentialOK := 0
+	keyPoolOK := 0
+	missing := 0
+	disabled := 0
+	unhealthy := 0
+	credentialless := 0
+	keyPoolMissing := 0
+	legacyCredentials := 0
+	queryErrors := 0
+	credentialQueryErrors := 0
+	keyPoolQueryErrors := 0
+	for code := range sourceCodes {
+		state := inspectAPIChannelOperational(ctx, s.apiRepo, code)
+		if state.QueryErr != nil {
+			queryErrors++
+			continue
+		}
+		if !state.Exists {
+			missing++
+			continue
+		}
+		if !state.Enabled {
+			disabled++
+		}
+		if state.HealthOK {
+			healthOK++
+		} else {
+			unhealthy++
+		}
+		if state.KeyQueryErr != nil && !state.LegacyKey {
+			credentialQueryErrors++
+		}
+		if state.KeyQueryErr != nil {
+			keyPoolQueryErrors++
+		}
+		if state.UsableCredentials() > 0 {
+			credentialOK++
+		} else {
+			credentialless++
+		}
+		if state.LegacyKey {
+			legacyCredentials++
+		}
+		if state.KeyQueryErr == nil && state.UsableKeys > 0 && !state.LegacyKey {
+			keyPoolOK++
+		} else if state.KeyQueryErr == nil && state.UsableKeys <= 0 {
+			keyPoolMissing++
+		}
+	}
+	return []dto.AdminSystemReadinessCheck{
+		boolCheck(
+			"model_gateway",
+			"api_channel_health",
+			"API 渠道健康",
+			healthOK == mapped,
+			fmt.Sprintf("API Channel 来源 %d/%d 最近健康检测 OK", healthOK, mapped),
+			fmt.Sprintf("API Channel 来源健康未闭环：OK %d/%d，不存在 %d，停用 %d，未测/失败 %d，查询失败 %d", healthOK, mapped, missing, disabled, unhealthy, queryErrors),
+			"api_channel",
+			false,
+		),
+		boolCheck(
+			"model_gateway",
+			"api_channel_credentials",
+			"API 渠道凭证",
+			credentialOK == mapped,
+			fmt.Sprintf("API Channel 来源 %d/%d 有可用 API 凭证", credentialOK, mapped),
+			fmt.Sprintf("API Channel 来源凭证未闭环：OK %d/%d，无可用凭证 %d，凭证查询失败 %d，渠道不存在/查询失败 %d", credentialOK, mapped, credentialless, credentialQueryErrors, missing+queryErrors),
+			"api_channel",
+			false,
+		),
+		boolCheck(
+			"model_gateway",
+			"api_channel_key_pool",
+			"API Key Pool",
+			keyPoolOK == mapped,
+			fmt.Sprintf("API Channel 来源 %d/%d 已使用 Key Pool 且无旧 channel 级 Key", keyPoolOK, mapped),
+			fmt.Sprintf("API Channel Key Pool 未闭环：OK %d/%d，无可用 Key Pool %d，仍有旧 channel 级 Key %d，Key Pool 查询失败 %d，渠道不存在/查询失败 %d", keyPoolOK, mapped, keyPoolMissing, legacyCredentials, keyPoolQueryErrors, missing+queryErrors),
+			"api_channel_key",
+			false,
+		),
+	}
+}
+
+func (s *SystemReadinessService) listReadinessCatalogModels(ctx context.Context, filter repo.ModelCatalogListFilter) ([]*model.ModelCatalog, int64, error) {
+	page := 1
+	var all []*model.ModelCatalog
+	var total int64
+	for {
+		filter.Page = page
+		filter.PageSize = 200
+		items, gotTotal, err := s.modelRepo.List(ctx, filter)
+		if err != nil {
+			return nil, 0, err
+		}
+		if page == 1 {
+			total = gotTotal
+		}
+		all = append(all, items...)
+		if len(items) == 0 || int64(len(all)) >= total {
+			return all, total, nil
+		}
+		page++
+	}
+}
+
+func (s *SystemReadinessService) listReadinessSources(ctx context.Context, filter repo.ModelSourceListFilter) ([]*model.ModelSourceMapping, int64, error) {
+	page := 1
+	var all []*model.ModelSourceMapping
+	var total int64
+	for {
+		filter.Page = page
+		filter.PageSize = 500
+		items, gotTotal, err := s.sourceRepo.List(ctx, filter)
+		if err != nil {
+			return nil, 0, err
+		}
+		if page == 1 {
+			total = gotTotal
+		}
+		all = append(all, items...)
+		if len(items) == 0 || int64(len(all)) >= total {
+			return all, total, nil
+		}
+		page++
+	}
+}
+
+func readinessModelGatewayKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "chat", "text":
+		return "text"
+	case "image":
+		return "image"
+	case "video":
+		return "video"
+	default:
+		return ""
+	}
+}
+
+func (s *SystemReadinessService) providerRouteChecks(ctx context.Context, modelGatewayManaged bool) []dto.AdminSystemReadinessCheck {
 	raw := ""
 	if s.sys != nil {
 		raw = s.sys.GetString(ctx, SettingProviderRoutes, "")
 	}
 	if strings.TrimSpace(raw) == "" {
+		if modelGatewayManaged {
+			return []dto.AdminSystemReadinessCheck{
+				okCheck("provider_routes", "configured", "账号池兼容路由", "Model Gateway 已配置模型和来源映射；provider.routes 为空仅影响未接管模型的旧账号池兜底", "system_config", false),
+			}
+		}
 		return []dto.AdminSystemReadinessCheck{
-			warnCheck("provider_routes", "configured", "Provider 路由配置", "provider.routes 未配置，将退回代码默认账号池选择", "system_config", false),
+			warnCheck("provider_routes", "configured", "账号池兼容路由", "Model Gateway 尚未接管且 provider.routes 未配置，将退回代码默认账号池选择", "system_config", false),
 		}
 	}
 	var anyRules []any
 	if err := json.Unmarshal([]byte(raw), &anyRules); err != nil {
 		return []dto.AdminSystemReadinessCheck{
-			errorCheck("provider_routes", "valid", "Provider 路由配置", "provider.routes 不是合法 JSON 数组", "system_config", true),
+			errorCheck("provider_routes", "valid", "账号池兼容路由", "provider.routes 不是合法 JSON 数组", "system_config", true),
 		}
 	}
 	rules, err := NormalizeProviderRouteRulesConfig(anyRules)
 	if err != nil {
 		return []dto.AdminSystemReadinessCheck{
-			errorCheck("provider_routes", "valid", "Provider 路由配置", err.Error(), "system_config", true),
+			errorCheck("provider_routes", "valid", "账号池兼容路由", err.Error(), "system_config", true),
 		}
 	}
 	enabledRules, enabledRoutes := 0, 0
@@ -205,13 +637,13 @@ func (s *SystemReadinessService) providerRouteChecks(ctx context.Context) []dto.
 		}
 	}
 	checks := []dto.AdminSystemReadinessCheck{
-		requiredCheck("provider_routes", "valid", "Provider 路由配置", enabledRules > 0 && enabledRoutes > 0, fmt.Sprintf("已配置 %d 条启用规则 / %d 条启用路线", enabledRules, enabledRoutes), "provider.routes 没有启用规则或启用路线", "system_config"),
+		requiredCheck("provider_routes", "valid", "账号池兼容路由", enabledRules > 0 && enabledRoutes > 0, fmt.Sprintf("已配置 %d 条启用规则 / %d 条启用路线，仅作为旧账号池兜底", enabledRules, enabledRoutes), "provider.routes 没有启用规则或启用路线", "system_config"),
 	}
 	for _, kind := range []string{"image", "text", "video"} {
 		if kinds[kind] || (kind == "text" && kinds["chat"]) || kinds["*"] {
-			checks = append(checks, okCheck("provider_routes", "kind_"+kind, routeKindLabel(kind), "已覆盖该入口", "system_config", false))
+			checks = append(checks, okCheck("provider_routes", "kind_"+kind, routeKindLabel(kind), "账号池兼容路由已覆盖该入口", "system_config", false))
 		} else {
-			checks = append(checks, warnCheck("provider_routes", "kind_"+kind, routeKindLabel(kind), "尚未配置该入口路由，可能退回默认账号池", "system_config", false))
+			checks = append(checks, warnCheck("provider_routes", "kind_"+kind, routeKindLabel(kind), "账号池兼容路由尚未覆盖该入口；Model Gateway 未接管的模型可能退回默认账号池", "system_config", false))
 		}
 	}
 	return checks

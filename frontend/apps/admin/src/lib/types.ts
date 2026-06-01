@@ -122,7 +122,7 @@ export interface AdminGenerationLogItem {
   user_label: string;
   api_key_id?: number;
   key_label?: string;
-  kind: 'image' | 'video' | string;
+  kind: 'image' | 'video' | 'chat' | 'text' | string;
   model_code: string;
   prompt: string;
   status: 0 | 1 | 2 | 3 | 4 | number;
@@ -130,6 +130,68 @@ export interface AdminGenerationLogItem {
   cost_points: number;
   preview_url?: string;
   error?: string;
+  model_gateway_route_snapshot?: ModelGatewayRouteSnapshot;
+  pricing_snapshot?: PricingAuditSnapshot;
+}
+
+export interface ModelGatewayRouteSnapshot {
+  version?: number;
+  model_code?: string;
+  kind?: string;
+  selected_index?: number;
+  candidate_count?: number;
+  skipped_count?: number;
+  candidates?: ModelGatewayRouteSnapshotCandidate[];
+  skipped_candidates?: ModelGatewayRouteSnapshotCandidate[];
+}
+
+export interface ModelGatewayRouteSnapshotCandidate {
+  index?: number;
+  source_type?: string;
+  source_code?: string;
+  source_name?: string;
+  provider?: string;
+  adapter?: string;
+  upstream_model?: string;
+  strategy?: string;
+  auth_type?: string;
+  image_api_mode?: string;
+  skip_reason?: string;
+}
+
+export interface PricingAuditSnapshot {
+  version?: number;
+  model_code?: string;
+  kind?: string;
+  pricing_source?: string;
+  pricing_mode?: string;
+  unit_basis?: string;
+  count?: number;
+  estimated_unit_points?: number;
+  estimated_total_points?: number;
+  estimated_points?: number;
+  pre_deduct_points?: number;
+  actual_points?: number;
+  refund_points?: number;
+  extra_points?: number;
+  input_unit_points?: number;
+  output_unit_points?: number;
+  estimated_prompt_tokens?: number;
+  estimated_completion_tokens?: number;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  usage_missing?: boolean;
+  settlement?: string;
+  request_mode?: string;
+  ratio?: string;
+  resolution?: string;
+  duration_sec?: number;
+  quality?: string;
+  matched_rule?: Record<string, unknown>;
+  failure_reason?: string;
 }
 
 export interface AdminGenerationLogPurgeResp {
@@ -137,8 +199,8 @@ export interface AdminGenerationLogPurgeResp {
 }
 
 export interface AdminGenerationUpstreamLogItem {
-  id: number;
-  task_id: string;
+ id: number;
+ task_id: string;
   provider: string;
   account_id?: number;
   kind?: string;
@@ -151,8 +213,326 @@ export interface AdminGenerationUpstreamLogItem {
   request_excerpt?: string;
   response_excerpt?: string;
   error?: string;
-  meta?: string;
+ meta?: string;
+ created_at: number;
+}
+
+export interface AdminGenerationConsumeRecord {
+  id: number;
+  task_id: string;
+  user_id: number;
+  kind: string;
+  model_code: string;
+  count: number;
+  unit_points: number;
+  total_points: number;
+  status: number;
+  account_id?: number;
   created_at: number;
+  updated_at: number;
+}
+
+export interface AdminGenerationBillingWalletLog {
+  id: number;
+  user_id: number;
+  direction: 1 | -1 | number;
+  biz_type: string;
+  biz_id: string;
+  points: number;
+  points_before: number;
+  points_after: number;
+  remark?: string;
+  created_at: number;
+}
+
+export interface AdminGenerationRefundRecord {
+  id: number;
+  task_id: string;
+  user_id: number;
+  points: number;
+  reason: string;
+  operator: string;
+  created_at: number;
+}
+
+export interface AdminGenerationBillingProof {
+  task_id: string;
+  consume_record?: AdminGenerationConsumeRecord;
+  wallet_logs: AdminGenerationBillingWalletLog[];
+  refund_records: AdminGenerationRefundRecord[];
+  summary: {
+    consume_record_found: boolean;
+    consume_status?: number;
+    consume_total_points?: number;
+    wallet_log_count: number;
+    refund_record_count: number;
+    wallet_net_points: number;
+    wallet_spend_points: number;
+    wallet_refund_points: number;
+    wallet_extra_points: number;
+  };
+}
+
+export type APIChannelAdapter =
+  | 'openai_compatible_chat'
+  | 'openai_compatible_images'
+  | 'openai_compatible_video'
+  | 'openai_responses'
+  | 'nova_async'
+  | 'pic2api_images'
+  | string;
+
+export interface APIChannelItem {
+  id: number;
+  code: string;
+  name: string;
+  provider_name: string;
+  adapter: APIChannelAdapter;
+  base_url: string;
+  has_api_key: boolean;
+  key_count: number;
+  enabled_key_count: number;
+  models: string[];
+  capabilities: string[];
+  proxy_id?: number;
+  priority: number;
+  weight: number;
+  rpm_limit: number;
+  tpm_limit: number;
+  timeout_seconds: number;
+  status: 0 | 1 | number;
+  last_test_at?: number;
+  last_test_status: number;
+  last_test_error?: string;
+  remark?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface APIChannelBody {
+  code: string;
+  name: string;
+  provider_name?: string;
+  adapter: APIChannelAdapter;
+  base_url: string;
+  api_key?: string;
+  clear_api_key?: boolean;
+  models?: string[];
+  capabilities?: string[];
+  proxy_id?: number;
+  clear_proxy?: boolean;
+  priority?: number;
+  weight?: number;
+  rpm_limit?: number;
+  tpm_limit?: number;
+  timeout_seconds?: number;
+  status?: 0 | 1;
+  remark?: string;
+}
+
+export interface APIChannelSecretsResp {
+  api_key: string;
+}
+
+export interface APIChannelTestResp {
+  ok: boolean;
+  status: number;
+  latency_ms: number;
+  error?: string;
+  tested_at: number;
+  credential_source?: string;
+  key_id?: number;
+  key_name?: string;
+}
+
+export interface APIChannelKeyItem {
+  id: number;
+  channel_id: number;
+  name: string;
+  has_api_key: boolean;
+  priority: number;
+  weight: number;
+  rpm_limit: number;
+  tpm_limit: number;
+  status: 0 | 1 | number;
+  last_used_at?: number;
+  last_error?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface APIChannelKeyBody {
+  name?: string;
+  api_key?: string;
+  priority?: number;
+  weight?: number;
+  rpm_limit?: number;
+  tpm_limit?: number;
+  status?: 0 | 1;
+}
+
+export type ModelCatalogKind = 'text' | 'image' | 'video' | 'chat';
+export type ModelPricingMode = 'fixed' | 'token' | 'char' | 'matrix' | 'manual';
+export type ModelSourceType = 'api_channel' | 'account_pool';
+
+export interface ModelCatalogItem {
+  id: number;
+  model_code: string;
+  display_name: string;
+  entry_kind: ModelCatalogKind;
+  provider_hint: string;
+  upstream_default_model: string;
+  capabilities: string[];
+  parameters_schema?: unknown;
+  pricing_mode: ModelPricingMode;
+  unit_points: number;
+  input_unit_points: number;
+  output_unit_points: number;
+  price_rules?: unknown;
+  min_plan: string;
+  tags: string[];
+  description?: string;
+  sort_order: number;
+  visible: 0 | 1;
+  status: 0 | 1;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ModelCatalogBody {
+  model_code: string;
+  display_name: string;
+  entry_kind: ModelCatalogKind;
+  provider_hint?: string;
+  upstream_default_model?: string;
+  capabilities?: string[];
+  parameters_schema?: unknown;
+  clear_parameters_schema?: boolean;
+  pricing_mode?: ModelPricingMode;
+  unit_points?: number;
+  input_unit_points?: number;
+  output_unit_points?: number;
+  price_rules?: unknown;
+  clear_price_rules?: boolean;
+  min_plan?: string;
+  tags?: string[];
+  description?: string;
+  sort_order?: number;
+  visible?: 0 | 1;
+  status?: 0 | 1;
+}
+
+export interface ModelSourceItem {
+  id: number;
+  model_code: string;
+  source_type: ModelSourceType;
+  source_code: string;
+  upstream_model: string;
+  adapter?: string;
+  auth_type?: string;
+  image_api_mode?: string;
+  strategy: 'round_robin' | 'weighted_rr' | string;
+  priority: number;
+  weight: number;
+  status: 0 | 1;
+  remark?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ModelSourceConflictItem {
+  id: number;
+  model_code: string;
+  source_type: ModelSourceType | string;
+  source_code: string;
+  upstream_model: string;
+  status: 0 | 1;
+  reason: string;
+}
+
+export interface ModelSourceBody {
+  model_code: string;
+  source_type: ModelSourceType;
+  source_code: string;
+  upstream_model?: string;
+  adapter?: string;
+  auth_type?: string;
+  image_api_mode?: string;
+  strategy?: 'round_robin' | 'weighted_rr' | string;
+  priority?: number;
+  weight?: number;
+  status?: 0 | 1;
+  remark?: string;
+}
+
+export interface ModelGatewayDryRunReq {
+  model_code: string;
+  entry_kind?: ModelCatalogKind | '';
+}
+
+export interface ModelGatewayDryRunResp {
+  model_code: string;
+  display_name: string;
+  entry_kind: string;
+  matched_model: boolean;
+  selected_index: number;
+  candidate_count: number;
+  available_count: number;
+  warning?: string;
+  candidates: ModelGatewayDryRunCandidate[];
+}
+
+export interface ModelGatewayDryRunCandidate {
+  index: number;
+  source_type: string;
+  source_code: string;
+  source_name?: string;
+  upstream_model: string;
+  adapter?: string;
+  auth_type?: string;
+  image_api_mode?: string;
+  strategy: string;
+  priority: number;
+  weight: number;
+  status: number;
+  available: boolean;
+  skip_reason?: string;
+  candidate_accounts?: number;
+  available_accounts?: number;
+}
+
+export interface ModelGatewayAuditItem {
+  task_id: string;
+  created_at: number;
+  user_id: number;
+  user_label: string;
+  kind: 'image' | 'video' | 'chat' | 'text' | string;
+  model_code: string;
+  status: 0 | 1 | 2 | 3 | 4 | number;
+  duration_ms?: number;
+  cost_points: number;
+  preview_url?: string;
+  selected_source_type?: string;
+  selected_source_code?: string;
+  selected_source_name?: string;
+  selected_provider?: string;
+  selected_adapter?: string;
+  selected_upstream_model?: string;
+  selected_index?: number;
+  candidate_count?: number;
+  skipped_count?: number;
+  skip_reasons?: string[];
+  pricing_source?: string;
+  pricing_mode?: string;
+  settlement?: string;
+  pre_deduct_points?: number;
+  actual_points?: number;
+  refund_points?: number;
+  extra_points?: number;
+  model_gateway_route_snapshot?: ModelGatewayRouteSnapshot;
+  pricing_snapshot?: PricingAuditSnapshot;
+  output_snapshot?: Record<string, unknown>;
+  video_job_snapshot?: Record<string, unknown>;
 }
 
 export interface ProviderHealthAuthItem {

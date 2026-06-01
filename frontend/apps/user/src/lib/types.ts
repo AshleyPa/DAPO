@@ -138,7 +138,7 @@ export interface CreateImageBody {
   mode?: 't2i' | 'i2i';
   count?: number;
   ratio?: string;
-  quality?: 'draft' | 'standard' | 'hd';
+  quality?: 'draft' | 'low' | 'standard' | 'medium' | 'hd' | 'high' | 'ultra';
   ref_assets?: string[];
   params?: Record<string, unknown>;
 }
@@ -159,6 +159,7 @@ export interface CreateTextBody {
   prompt: string;
   max_tokens?: number;
   images?: string[];
+  params?: Record<string, unknown>;
 }
 
 export interface TextGenerationResp {
@@ -176,6 +177,9 @@ export interface PublicModel {
   kind: 'text' | 'image' | 'video';
   provider: string;
   upstream_model?: string;
+  capabilities?: string[];
+  parameters_schema?: unknown;
+  pricing_mode?: 'fixed' | 'token' | 'char' | 'matrix' | 'manual' | string;
   unit_points: number;
   input_unit_points?: number;
   output_unit_points?: number;
@@ -189,6 +193,7 @@ export interface ImagePriceRule {
   ratio_group?: 'standard' | 'extended' | string;
   ratios?: string[];
   resolution: '1K' | '2K' | '4K' | string;
+  quality?: string;
   unit_points: number;
   enabled?: boolean;
 }
