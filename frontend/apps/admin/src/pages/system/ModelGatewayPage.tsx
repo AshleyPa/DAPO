@@ -433,39 +433,58 @@ export default function ModelGatewayPage() {
                 <tr><td colSpan={8} className="text-center text-text-tertiary">加载中...</td></tr>
               ) : modelItems.length === 0 ? (
                 <tr><td colSpan={8} className="text-center text-text-tertiary">暂无模型</td></tr>
-              ) : modelItems.map((item) => (
-                <tr key={item.id} className={selected?.id === item.id ? 'bg-surface-2/70' : ''}>
-                  <td>
-                    <button className="text-left" onClick={() => setSelected(item)}>
-                      <div className="font-semibold text-text-primary">{catalogDisplayName(item)}</div>
-                      <div className="mt-1 font-mono text-tiny text-text-tertiary">{item.model_code}</div>
-                    </button>
-                  </td>
-                  <td>{kindLabel(item.entry_kind)}</td>
-                  <td>
-                    <div className="font-mono text-small text-text-secondary">{item.upstream_default_model || '-'}</div>
-                    <div className="text-tiny text-text-tertiary">{item.provider_hint || '未标注'}</div>
-                  </td>
-                  <td><TagList items={item.capabilities} empty="-" /></td>
-                  <td>{pricingSummary(item)}</td>
-                  <td>{item.visible === 1 ? '可见' : '隐藏'}</td>
-                  <td>{item.status === 1 ? '启用' : '停用'}</td>
-                  <td>
-                    <div className="flex gap-2">
-                      <button className="btn btn-outline btn-sm" onClick={() => setModelEditing(item)}>编辑</button>
-                      <button
-                        className="btn btn-danger-ghost btn-icon btn-sm"
-                        onClick={() => {
-                          if (window.confirm(`确定删除模型「${catalogDisplayName(item)}」吗？有来源映射时后端会拒绝删除。`)) removeModel.mutate(item.id);
-                        }}
-                        title="删除模型"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              ) : modelItems.map((item) => {
+                const isSelected = selected?.id === item.id;
+                return (
+                  <tr
+                    key={item.id}
+                    className={`${isSelected ? 'bg-surface-2/80' : ''} cursor-pointer transition-colors hover:bg-surface-2/60`}
+                    onClick={() => setSelected(item)}
+                  >
+                    <td>
+                      <div className="text-left">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-text-primary">{catalogDisplayName(item)}</span>
+                          {isSelected && <span className="badge badge-klein">当前选中</span>}
+                        </div>
+                        <div className="mt-1 font-mono text-tiny text-text-tertiary">{item.model_code}</div>
+                      </div>
+                    </td>
+                    <td>{kindLabel(item.entry_kind)}</td>
+                    <td>
+                      <div className="font-mono text-small text-text-secondary">{item.upstream_default_model || '-'}</div>
+                      <div className="text-tiny text-text-tertiary">{item.provider_hint || '未标注'}</div>
+                    </td>
+                    <td><TagList items={item.capabilities} empty="-" /></td>
+                    <td>{pricingSummary(item)}</td>
+                    <td>{item.visible === 1 ? '可见' : '隐藏'}</td>
+                    <td>{item.status === 1 ? '启用' : '停用'}</td>
+                    <td>
+                      <div className="flex gap-2">
+                        <button
+                          className="btn btn-outline btn-sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setModelEditing(item);
+                          }}
+                        >
+                          编辑
+                        </button>
+                        <button
+                          className="btn btn-danger-ghost btn-icon btn-sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`确定删除模型「${catalogDisplayName(item)}」吗？有来源映射时后端会拒绝删除。`)) removeModel.mutate(item.id);
+                          }}
+                          title="删除模型"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -474,7 +493,14 @@ export default function ModelGatewayPage() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <h2 className="text-h4 font-semibold text-text-primary">来源映射</h2>
-              <div className="mt-1 font-mono text-tiny text-text-tertiary">{selected?.model_code || '未选择模型'}</div>
+              {selected ? (
+                <div className="mt-1 space-y-0.5 text-tiny text-text-tertiary">
+                  <div>当前选中：<span className="font-semibold text-text-secondary">{catalogDisplayName(selected)}</span></div>
+                  <div className="font-mono">{selected.model_code}</div>
+                </div>
+              ) : (
+                <div className="mt-1 text-tiny text-text-tertiary">未选择模型</div>
+              )}
             </div>
             <div className="flex gap-2">
               <button className="btn btn-outline btn-sm" disabled={!selected || dryRun.isPending} onClick={() => dryRun.mutate()}>
@@ -488,11 +514,17 @@ export default function ModelGatewayPage() {
 
           {!selected ? (
             <div className="rounded-md border border-dashed border-border p-6 text-center text-small text-text-tertiary">选择左侧模型后配置来源</div>
-          ) : sources.isLoading ? (
-            <div className="text-small text-text-tertiary">加载来源...</div>
-          ) : (sources.data?.list.length ?? 0) === 0 ? (
-            <div className="rounded-md border border-dashed border-border p-6 text-center text-small text-text-tertiary">暂无来源映射</div>
           ) : (
+            <div className="rounded-md border border-border bg-surface-2 px-3 py-2 text-tiny text-text-secondary">
+              新增来源会挂到当前选中的 <span className="font-mono font-semibold text-text-primary">{selected.model_code}</span>。
+            </div>
+          )}
+
+          {selected && sources.isLoading ? (
+            <div className="text-small text-text-tertiary">加载来源...</div>
+          ) : selected && (sources.data?.list.length ?? 0) === 0 ? (
+            <div className="rounded-md border border-dashed border-border p-6 text-center text-small text-text-tertiary">暂无来源映射</div>
+          ) : selected ? (
             <div className="space-y-2">
               {sources.data?.list.map((item) => (
                 <div key={item.id} className="rounded-md border border-border bg-surface-1 p-3">
@@ -526,7 +558,7 @@ export default function ModelGatewayPage() {
                 </div>
               ))}
             </div>
-          )}
+          ) : null}
 
           {dryRunResult && dryRunResult.model_code === selected?.model_code && (
             <DryRunPanel result={dryRunResult} />
